@@ -17,6 +17,23 @@ from typing import List, Optional
 import os
 
 
+def filter_gtx_trips(tcn: pd.DataFrame) -> pd.DataFrame:
+    """
+    GTX 이용 통행만 필터링
+
+    transport_category 컬럼에서 'gtx' 문자열이 포함된 행만 반환
+    (gtx_only, bus+gtx, train+gtx, bus+train+gtx)
+
+    Args:
+        tcn: TCN DataFrame (transport_category 컬럼 필요)
+
+    Returns:
+        GTX 이용 통행만 포함된 DataFrame
+    """
+    mask = tcn['transport_category'].str.contains('gtx', case=False, na=False)
+    return tcn[mask].copy()
+
+
 def create_otp_od_data(tcn: pd.DataFrame) -> pd.DataFrame:
     """
     단일 TCN DataFrame을 OTP 요청용 OD pair로 그룹화
@@ -79,12 +96,13 @@ def merge_multiple_tcn(tcn_list: List[pd.DataFrame]) -> pd.DataFrame:
     return final_od
 
 
-def load_and_merge_tcn_files(tcn_paths: List[str]) -> pd.DataFrame:
+def load_and_merge_tcn_files(tcn_paths: List[str], filter_gtx: bool = False) -> pd.DataFrame:
     """
     여러 TCN parquet 파일을 로드하여 OD pair로 그룹화
 
     Args:
         tcn_paths: TCN parquet 파일 경로 리스트
+        filter_gtx: True이면 GTX 이용 통행만 필터링
 
     Returns:
         통합 OD pair DataFrame
@@ -93,8 +111,12 @@ def load_and_merge_tcn_files(tcn_paths: List[str]) -> pd.DataFrame:
     for path in tcn_paths:
         print(f"Loading {path}...")
         tcn = pd.read_parquet(path)
+        if filter_gtx:
+            tcn = filter_gtx_trips(tcn)
+            print(f"  {len(tcn):,} GTX trips")
+        else:
+            print(f"  {len(tcn):,} trips")
         tcn_list.append(tcn)
-        print(f"  {len(tcn):,} trips")
 
     print(f"\nMerging {len(tcn_list)} files...")
     od_data = merge_multiple_tcn(tcn_list)
@@ -128,7 +150,8 @@ def save_otp_input(od_data: pd.DataFrame, output_path: str):
 
 def process_tcn_to_otp_input(
     tcn_paths: List[str],
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
+    filter_gtx: bool = False
 ) -> pd.DataFrame:
     """
     TCN 파일들을 OTP 입력용 OD pair 데이터로 변환
@@ -136,6 +159,7 @@ def process_tcn_to_otp_input(
     Args:
         tcn_paths: TCN parquet 파일 경로 리스트
         output_path: 출력 경로 (None이면 저장 안 함)
+        filter_gtx: True이면 GTX 이용 통행만 필터링
 
     Returns:
         OD pair DataFrame
@@ -143,10 +167,10 @@ def process_tcn_to_otp_input(
     Example:
         >>> tcn_paths = [f'data/TCN_{d}.parquet' for d in dates]
         >>> od_data = process_tcn_to_otp_input(tcn_paths, 'data/otp_input.csv')
-        >>> # 최소 통행 건수 필터링 (사용자가 직접)
-        >>> od_filtered = od_data[od_data['trip_count'] >= 5]
+        >>> # GTX 통행만 필터링
+        >>> od_gtx = process_tcn_to_otp_input(tcn_paths, 'data/otp_gtx.csv', filter_gtx=True)
     """
-    od_data = load_and_merge_tcn_files(tcn_paths)
+    od_data = load_and_merge_tcn_files(tcn_paths, filter_gtx=filter_gtx)
 
     if output_path:
         save_otp_input(od_data, output_path)

@@ -701,6 +701,10 @@ class TCDtoTCNConverter:
         df['승차정류장명_str'] = df['승차정류장 명칭'].astype(str) if '승차정류장 명칭' in df.columns else df['승차정류장ID_str']
         df['하차정류장명_str'] = df['하차정류장 명칭'].astype(str) if '하차정류장 명칭' in df.columns else df['하차정류장ID_str']
 
+        # 좌표 시퀀스 생성용 (모든 하차 좌표를 리스트로 수집)
+        df['_하차lat'] = df['하차정류장 X 좌표']
+        df['_하차lon'] = df['하차정류장 Y 좌표']
+
         # 그룹별 집계
         agg_dict = {
             # 기본 정보
@@ -730,6 +734,10 @@ class TCDtoTCNConverter:
             '하차정류장ID_str': list,
             '승차정류장명_str': 'first',
             '하차정류장명_str': list,
+
+            # 좌표 시퀀스용 (모든 하차 좌표 리스트)
+            '_하차lat': list,
+            '_하차lon': list,
 
             # 숨겨진 환승 (leg별)
             '숨겨진환승횟수': 'sum',
@@ -781,6 +789,37 @@ class TCDtoTCNConverter:
 
         tcn['정류장명칭시퀀스'] = tcn.apply(build_name_seq, axis=1)
 
+        # 정류장 좌표 시퀀스 생성 (정류장명칭시퀀스와 1:1 대응, 숨겨진환승역 포함)
+        # 숨겨진 환승역 좌표 룩업 (TCD 승/하차 정류장에서 구축)
+        _o = df[['승차정류장명_str', '승차정류장 X 좌표', '승차정류장 Y 좌표']].drop_duplicates('승차정류장명_str')
+        _d = df[['하차정류장명_str', '하차정류장 X 좌표', '하차정류장 Y 좌표']].drop_duplicates('하차정류장명_str')
+        _stn_coords = {}
+        for _, r in _o.iterrows():
+            if pd.notna(r['승차정류장 X 좌표']):
+                _stn_coords[r['승차정류장명_str']] = (r['승차정류장 X 좌표'], r['승차정류장 Y 좌표'])
+        for _, r in _d.iterrows():
+            if r['하차정류장명_str'] not in _stn_coords and pd.notna(r['하차정류장 X 좌표']):
+                _stn_coords[r['하차정류장명_str']] = (r['하차정류장 X 좌표'], r['하차정류장 Y 좌표'])
+
+        def build_coord_seq(row):
+            lat_seq = [row['승차정류장 X 좌표']]
+            lon_seq = [row['승차정류장 Y 좌표']]
+            hidden_list = row['숨겨진환승역']  # list of lists (before flatten)
+            a_lats = row['_하차lat']
+            a_lons = row['_하차lon']
+            for i, (a_lat, a_lon) in enumerate(zip(a_lats, a_lons)):
+                if i < len(hidden_list) and hidden_list[i]:
+                    for h_name in hidden_list[i]:
+                        h = _stn_coords.get(h_name)
+                        if h:
+                            lat_seq.append(h[0])
+                            lon_seq.append(h[1])
+                lat_seq.append(a_lat)
+                lon_seq.append(a_lon)
+            return pd.Series([lat_seq, lon_seq])
+
+        tcn[['정류장lat시퀀스', '정류장lon시퀀스']] = tcn.apply(build_coord_seq, axis=1)
+
         # 숨겨진환승역 flatten (list of lists → single list)
         tcn['숨겨진환승역'] = tcn['숨겨진환승역'].apply(
             lambda lol: [s for sub in lol for s in sub] if lol else []
@@ -788,7 +827,8 @@ class TCDtoTCNConverter:
 
         # 임시 컬럼 제거
         tcn = tcn.drop(columns=['승차정류장ID_str', '하차정류장ID_str',
-                                '승차정류장명_str', '하차정류장명_str'])
+                                '승차정류장명_str', '하차정류장명_str',
+                                '_하차lat', '_하차lon'])
 
         # 환승 횟수 계산
         tcn['명시적환승횟수'] = tcn['교통수단코드'].str.len() - 1
@@ -976,6 +1016,12 @@ def process_multiple_dates(dates: List[str],
             output_path = os.path.join(output_dir, date, f'TCN_{date}_route.parquet')
 
         tcn = process_date(date, base_path, output_path, split_round_trip, sig_path, ctprvn_path)
-        results[date] = tcn
+
+        if output_path:
+            # 저장 완료 시 메모리 해제, 경로만 보관
+            results[date] = output_path
+            del tcn
+        else:
+            results[date] = tcn
 
     return results
