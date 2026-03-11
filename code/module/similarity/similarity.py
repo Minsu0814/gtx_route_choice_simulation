@@ -3,10 +3,10 @@
 OTP-스마트카드 유사도 비교 모듈
 6 Level Similarity Metrics + Composite Score
 
-폴리라인 기반 공간 비교 포함:
-- OTP legGeometry polyline → 실제 경로 좌표 (GTFS 불필요)
-- GTFS 가용 시: 양방향 Hausdorff 거리 기반 유사도
-- GTFS 미가용 시: SC 좌표 → OTP polyline 근접도 (points-on-path)
+공간 유사도:
+- 정류장 좌표 점집합 간 평균 Hausdorff 거리 기반
+- OTP boarding/alighting 좌표 vs SC OD+환승 좌표
+- 이상치(환승 찍고 온 점)에 강건, 전반적으로 다른 경로는 잘 구분
 """
 
 import numpy as np
@@ -284,9 +284,9 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
     # 7개 카테고리 분류
     transport_category = _mode_set_to_category(modes)
 
-    # GTFS 기반 전체 정류장 좌표 확장
-    # OTP leg에서 route_name + from.name + to.name → GTFS expand_route
+    # GTFS 기반 전체 정류장 좌표 확장 + shape polyline 확장
     full_stop_coords = []
+    shape_polyline = []
     if gtfs_lookup and unique_stops and len(unique_stops) >= 2:
         route_list = [tl['route_name'] for tl in transit_legs]
         for leg_idx in range(len(route_list)):
@@ -295,9 +295,9 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
             route_name = route_list[leg_idx] if leg_idx < len(route_list) else None
 
             if from_stop and to_stop and route_name:
+                # 정류장 시퀀스 확장 (기존)
                 expanded = gtfs_lookup.expand_route(route_name, from_stop, to_stop)
                 if expanded:
-                    # 이전 leg와 연결점 중복 제거
                     if full_stop_coords and expanded:
                         last = full_stop_coords[-1]
                         first = expanded[0]
@@ -306,6 +306,18 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
                             expanded = expanded[1:]
                     full_stop_coords.extend(expanded)
 
+                # Shape polyline 확장 (신규)
+                shape_seg = gtfs_lookup.expand_route_shape(
+                    route_name, from_stop, to_stop)
+                if shape_seg:
+                    if shape_polyline and shape_seg:
+                        last = shape_polyline[-1]
+                        first = shape_seg[0]
+                        if (abs(last[0] - first[0]) < 1e-5 and
+                                abs(last[1] - first[1]) < 1e-5):
+                            shape_seg = shape_seg[1:]
+                    shape_polyline.extend(shape_seg)
+
     return {
         'modes': modes,
         'transport_category': transport_category,
@@ -313,6 +325,7 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
         'stops': unique_stops,
         'stop_coords': unique_coords,
         'full_stop_coords': full_stop_coords,  # [(name, lat, lon), ...]
+        'shape_polyline': shape_polyline,  # [(lat, lon), ...] from GTFS shapes.txt
         'route_polyline': route_polyline,  # [(lat, lon), ...] from legGeometry
         'total_time': total_time,
         'routes': list(set(routes)),
@@ -478,13 +491,14 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
                     except (TypeError, ValueError):
                         pass
 
-    # GTFS 기반 전체 정류장 좌표 확장
+    # GTFS 기반 전체 정류장 좌표 확장 + shape polyline 확장
     # TCN 데이터 구조:
     #   stops = ['강남', '교대', '고속터미널']  (origin, alight1, alight2)
     #   routes = ['2호선', '3호선']             (route1, route2)
     #   Leg 0: route='2호선', from='강남', to='교대'
     #   Leg 1: route='3호선', from='교대', to='고속터미널'
     full_stop_coords = []
+    shape_polyline = []
     if gtfs_lookup and routes and len(stops) >= 2:
         for leg_idx in range(len(routes)):
             from_stop = stops[leg_idx] if leg_idx < len(stops) else None
@@ -492,9 +506,9 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
             route_name = routes[leg_idx] if leg_idx < len(routes) else None
 
             if from_stop and to_stop and route_name:
+                # 정류장 시퀀스 확장 (기존)
                 expanded = gtfs_lookup.expand_route(route_name, from_stop, to_stop)
                 if expanded:
-                    # 이전 leg와 연결점 중복 제거
                     if full_stop_coords and expanded:
                         last = full_stop_coords[-1]
                         first = expanded[0]
@@ -503,6 +517,18 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
                             expanded = expanded[1:]
                     full_stop_coords.extend(expanded)
 
+                # Shape polyline 확장 (신규)
+                shape_seg = gtfs_lookup.expand_route_shape(
+                    route_name, from_stop, to_stop)
+                if shape_seg:
+                    if shape_polyline and shape_seg:
+                        last = shape_polyline[-1]
+                        first = shape_seg[0]
+                        if (abs(last[0] - first[0]) < 1e-5 and
+                                abs(last[1] - first[1]) < 1e-5):
+                            shape_seg = shape_seg[1:]
+                    shape_polyline.extend(shape_seg)
+
     return {
         'modes': modes,
         'transport_category': cat if cat and cat not in ('', 'nan', 'unknown') else _mode_set_to_category(modes),
@@ -510,6 +536,7 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
         'stops': stops,
         'stop_coords': stop_coords,  # [(lat, lon), ...] 중간 환승 정류장 좌표
         'full_stop_coords': full_stop_coords,  # [(name, lat, lon), ...]
+        'shape_polyline': shape_polyline,  # [(lat, lon), ...] from GTFS shapes.txt
         'total_time': total_time,
         'routes': routes,
         'od_coords': od_coords,
@@ -713,15 +740,20 @@ def compute_route_metrics(otp_parsed, sc_parsed):
 
 
 # ============================================================
-# Level 6: 공간 (Spatial) - 가중치 0.10
+# Level 6: 공간 (Spatial) - 정류장 좌표 점집합 평균 Hausdorff
 # ============================================================
-def compute_polyline_similarity(coords1, coords2, normalize_dist=5000):
+def compute_avg_hausdorff_similarity(coords1, coords2, normalize_dist=5000):
     """
-    두 폴리라인 간 평균 Hausdorff 거리 기반 유사도
+    두 정류장 좌표 점집합 간 평균 Hausdorff 거리 기반 유사도
+
+    Average Hausdorff = (avg_min(A→B) + avg_min(B→A)) / 2
+    각 점에서 상대 점집합까지의 최소 거리를 평균 → 양방향 평균.
+    이상치(환승 찍고 온 점 1개)에 강건하면서도,
+    전반적으로 다른 경로(버스 돌아온 경우)는 잘 구분.
 
     Args:
-        coords1: [(name, lat, lon), ...] 또는 [(lat, lon), ...]
-        coords2: [(name, lat, lon), ...] 또는 [(lat, lon), ...]
+        coords1: [(lat, lon), ...] 또는 [(name, lat, lon), ...]
+        coords2: [(lat, lon), ...] 또는 [(name, lat, lon), ...]
         normalize_dist: 정규화 기준 거리 (미터), 기본 5km
 
     Returns:
@@ -746,8 +778,8 @@ def compute_polyline_similarity(coords1, coords2, normalize_dist=5000):
     if not pts1 or not pts2:
         return 0.0
 
-    # 방향 1: pts1의 각 점 → pts2의 최근접 점 거리 평균
     def avg_min_distance(from_pts, to_pts):
+        """from_pts의 각 점 → to_pts의 최근접 점 거리의 평균"""
         total = 0.0
         for lat1, lon1 in from_pts:
             min_dist = float('inf')
@@ -758,14 +790,14 @@ def compute_polyline_similarity(coords1, coords2, normalize_dist=5000):
             total += min_dist
         return total / len(from_pts)
 
-    avg1 = avg_min_distance(pts1, pts2)
-    avg2 = avg_min_distance(pts2, pts1)
+    avg1 = avg_min_distance(pts1, pts2)  # A→B
+    avg2 = avg_min_distance(pts2, pts1)  # B→A
 
-    # 양방향 평균의 최대값 (modified Hausdorff)
-    hausdorff_avg = max(avg1, avg2)
+    # 평균 Hausdorff: 양방향 평균
+    avg_hausdorff = (avg1 + avg2) / 2
 
     # 정규화: 5km 이상이면 0
-    score = max(0.0, 1.0 - hausdorff_avg / normalize_dist)
+    score = max(0.0, 1.0 - avg_hausdorff / normalize_dist)
     return score
 
 
@@ -857,10 +889,10 @@ def compute_points_on_path_similarity(sc_coords, otp_polyline, normalize_dist=20
 
 def compute_spatial_metrics(otp_parsed, sc_parsed):
     """
-    공간 유사도 지표 (OTP legGeometry polyline 기반)
+    공간 유사도 지표 — 정류장 좌표 점집합 간 평균 Hausdorff
 
-    - GTFS 있음: OTP polyline vs SC GTFS확장 좌표 → 양방향 Hausdorff
-    - GTFS 없음: SC의 알려진 정류장 좌표 → OTP polyline 위 근접도
+    OTP 정류장 좌표(boarding/alighting)와 SC 정류장 좌표(OD + 환승)를
+    점집합으로 비교. polyline/shape 등 연결선은 사용하지 않음.
     """
     otp_od = otp_parsed.get('od_coords') or {}
     sc_od = sc_parsed.get('od_coords') or {}
@@ -878,27 +910,26 @@ def compute_spatial_metrics(otp_parsed, sc_parsed):
     # 환승 정류장 일치율 (참고용 유지)
     transfer_loc_match = _compute_transfer_loc_match(otp_parsed, sc_parsed, threshold=500)
 
-    # OTP route_polyline (legGeometry 기반)
-    otp_polyline = otp_parsed.get('route_polyline', [])
+    # OTP 정류장 좌표 (transit leg의 boarding/alighting 좌표)
+    otp_coords = otp_parsed.get('stop_coords', [])
 
-    # GTFS 기반 폴리라인 유사도
-    otp_full = otp_parsed.get('full_stop_coords', [])
-    sc_full = sc_parsed.get('full_stop_coords', [])
+    # SC 정류장 좌표 (OD + 환승 정류장)
+    sc_coords = _extract_sc_known_coords(sc_parsed)
 
-    if otp_full and sc_full:
-        # GTFS 있음: 기존 양방향 Hausdorff 방식 유지
-        polyline_similarity = compute_polyline_similarity(otp_full, sc_full)
-    elif otp_polyline:
-        # GTFS 없음, legGeometry 있음: SC 알려진 좌표 → OTP polyline 근접도
-        sc_coords = _extract_sc_known_coords(sc_parsed)
-        polyline_similarity = compute_points_on_path_similarity(sc_coords, otp_polyline)
+    # 평균 Hausdorff 기반 공간 유사도
+    if otp_coords and sc_coords:
+        spatial_similarity = compute_avg_hausdorff_similarity(
+            otp_coords, sc_coords, normalize_dist=5000)
+        spatial_method = 'avg_hausdorff'
     else:
-        polyline_similarity = 0.0
+        spatial_similarity = 0.0
+        spatial_method = 'none'
 
     return {
         'od_distance_sim': od_distance_sim,
         'transfer_loc_match': transfer_loc_match,
-        'polyline_similarity': polyline_similarity,
+        'polyline_similarity': spatial_similarity,
+        'spatial_method': spatial_method,
     }
 
 

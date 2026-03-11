@@ -13,7 +13,7 @@ OTP itinerary에서 경로 선택 모델(MNL/Mixed Logit/NN) 학습용 피처를
 import math
 import pandas as pd
 
-from module.similarity import (
+from module.similarity.similarity import (
     OTP_MODE_MAP,
     GTX_ROUTE_KEYWORDS,
     _normalize_route_name,

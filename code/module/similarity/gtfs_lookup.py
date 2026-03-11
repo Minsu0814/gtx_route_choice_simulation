@@ -14,6 +14,7 @@ GTFS 데이터를 로드하여 노선명 → 전체 정류장 시퀀스(좌표 �
 
 import os
 import re
+import json
 import pandas as pd
 import numpy as np
 from typing import List, Tuple, Optional, Dict
@@ -45,16 +46,21 @@ class GTFSRouteLookup:
         # → [('강남', 37.497, 127.027), ('역삼', ...), ..., ('서울대입구', ...)]
     """
 
-    def __init__(self, gtfs_dir: str, cache_path: Optional[str] = None):
+    def __init__(self, gtfs_dir: str, cache_path: Optional[str] = None,
+                 shape_cache_path: Optional[str] = None):
         """
         Args:
             gtfs_dir: GTFS 파일 디렉토리 (stops.txt, routes.txt, trips.txt, stop_times.txt)
             cache_path: 캐시 parquet 경로 (None이면 gtfs_dir/route_stops_cache.parquet)
+            shape_cache_path: shape 캐시 경로 (None이면 gtfs_dir/shape_polylines_cache.parquet)
         """
         self.gtfs_dir = gtfs_dir
         if cache_path is None:
             cache_path = os.path.join(gtfs_dir, 'route_stops_cache.parquet')
         self.cache_path = cache_path
+        if shape_cache_path is None:
+            shape_cache_path = os.path.join(gtfs_dir, 'shape_polylines_cache.parquet')
+        self.shape_cache_path = shape_cache_path
 
         # 로드
         self._stops_df = self._load_stops()
@@ -66,9 +72,14 @@ class GTFSRouteLookup:
         self._route_name_to_ids = self._build_route_name_lookup()
         self._route_id_to_stops = self._build_route_stops_lookup()
 
+        # Shape polyline 캐시 로드/빌드
+        self._shape_cache = self._load_or_build_shape_polylines()
+        self._route_id_to_shape = self._build_route_shape_lookup()
+
         n_routes = len(self._route_id_to_stops)
         n_stops = len(self._stop_id_to_info)
-        print(f"GTFSRouteLookup: {n_routes} routes, {n_stops} stops loaded")
+        n_shapes = len(self._route_id_to_shape)
+        print(f"GTFSRouteLookup: {n_routes} routes, {n_stops} stops, {n_shapes} shapes loaded")
 
     def _load_stops(self) -> pd.DataFrame:
         """stops.txt 로드"""
@@ -140,6 +151,98 @@ class GTFSRouteLookup:
         print(f"    Route stops built: {len(result):,} rows")
 
         return result
+
+    # ==============================================================
+    # Shape polyline 캐시 빌드/로드
+    # ==============================================================
+    def _load_or_build_shape_polylines(self) -> pd.DataFrame:
+        """
+        shape polyline 캐시 로드 또는 빌드
+
+        캐시 구조: shape_id, route_id, coords_json
+        coords_json = JSON string of [(lat, lon), ...]
+        """
+        if os.path.exists(self.shape_cache_path):
+            print(f"  Loading cached shape polylines from {self.shape_cache_path}")
+            return pd.read_parquet(self.shape_cache_path)
+
+        shapes_path = os.path.join(self.gtfs_dir, 'shapes.txt')
+        if not os.path.exists(shapes_path):
+            print(f"  shapes.txt not found, skipping shape polyline cache")
+            return pd.DataFrame(columns=['shape_id', 'route_id', 'coords_json'])
+
+        print(f"  Building shape polyline cache (this may take a few minutes)...")
+        cache_df = self._build_shape_polylines_from_gtfs()
+
+        os.makedirs(os.path.dirname(self.shape_cache_path), exist_ok=True)
+        cache_df.to_parquet(self.shape_cache_path, index=False)
+        print(f"  Cached to {self.shape_cache_path} ({len(cache_df):,} rows)")
+
+        return cache_df
+
+    def _build_shape_polylines_from_gtfs(self) -> pd.DataFrame:
+        """
+        trips.txt에서 route_id별 대표 trip의 shape_id 추출 후
+        shapes.txt를 chunked 읽기하여 대표 shape만 필터 → polyline 구성
+        """
+        # 1. trips.txt → route_id별 대표 trip의 shape_id
+        trips_path = os.path.join(self.gtfs_dir, 'trips.txt')
+        trips_df = pd.read_csv(trips_path,
+                                dtype={'route_id': str, 'trip_id': str, 'shape_id': str})
+        representative = trips_df.groupby('route_id').first().reset_index()
+        shape_to_route = dict(zip(representative['shape_id'], representative['route_id']))
+        rep_shape_ids = set(representative['shape_id'].dropna().values)
+        print(f"    Representative shapes: {len(rep_shape_ids):,}")
+
+        # 2. shapes.txt chunked 읽기, 대표 shape_id만 필터
+        shapes_path = os.path.join(self.gtfs_dir, 'shapes.txt')
+        chunk_size = 500_000
+        chunks = []
+
+        for chunk in pd.read_csv(shapes_path, chunksize=chunk_size,
+                                  dtype={'shape_id': str,
+                                         'shape_pt_lat': float,
+                                         'shape_pt_lon': float,
+                                         'shape_pt_sequence': int}):
+            filtered = chunk[chunk['shape_id'].isin(rep_shape_ids)]
+            if len(filtered) > 0:
+                chunks.append(filtered[['shape_id', 'shape_pt_lat',
+                                        'shape_pt_lon', 'shape_pt_sequence']])
+
+        if not chunks:
+            return pd.DataFrame(columns=['shape_id', 'route_id', 'coords_json'])
+
+        shapes_filtered = pd.concat(chunks, ignore_index=True)
+        print(f"    Filtered shape points: {len(shapes_filtered):,}")
+
+        # 3. shape_id별 정렬 → polyline 구성
+        rows = []
+        for shape_id, group in shapes_filtered.groupby('shape_id'):
+            sorted_pts = group.sort_values('shape_pt_sequence')
+            coords = list(zip(sorted_pts['shape_pt_lat'].values,
+                              sorted_pts['shape_pt_lon'].values))
+            route_id = shape_to_route.get(shape_id, '')
+            rows.append({
+                'shape_id': shape_id,
+                'route_id': route_id,
+                'coords_json': json.dumps(coords),
+            })
+
+        result = pd.DataFrame(rows)
+        print(f"    Shape polylines built: {len(result):,}")
+        return result
+
+    def _build_route_shape_lookup(self) -> Dict[str, List[Tuple[float, float]]]:
+        """
+        route_id → shape polyline [(lat, lon), ...] 룩업 빌드
+        """
+        lookup: Dict[str, List[Tuple[float, float]]] = {}
+        for _, row in self._shape_cache.iterrows():
+            route_id = row['route_id']
+            coords = json.loads(row['coords_json'])
+            # 튜플로 변환
+            lookup[route_id] = [(float(lat), float(lon)) for lat, lon in coords]
+        return lookup
 
     def _build_stop_id_lookup(self) -> Dict[str, Tuple[str, float, float]]:
         """stop_id → (name, lat, lon) 룩업"""
@@ -292,6 +395,90 @@ class GTFSRouteLookup:
                         best_length = len(segment)
                         best_result = [(name, lat, lon)
                                        for _, name, lat, lon in segment]
+
+        return best_result
+
+    def _nearest_shape_index(self, shape_coords: List[Tuple[float, float]],
+                              lat: float, lon: float) -> int:
+        """shape polyline에서 주어진 좌표에 가장 가까운 점의 인덱스 반환"""
+        best_idx = 0
+        best_dist = float('inf')
+        for i, (slat, slon) in enumerate(shape_coords):
+            # 빠른 유클리드 근사 (lat/lon 소수점 비교, 한국 내 충분)
+            d = (slat - lat) ** 2 + (slon - lon) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        return best_idx
+
+    def expand_route_shape(self, route_name: str, from_stop: str, to_stop: str
+                           ) -> List[Tuple[float, float]]:
+        """
+        노선명 + 출발/도착 정류장 → dense shape polyline 구간 반환
+
+        shapes.txt 기반의 고밀도 좌표 시퀀스를 반환. expand_route()와 동일한
+        방향 자동 선택 로직 (여러 route_id/shape 중 from→to 순방향인 것 선택).
+
+        Args:
+            route_name: 노선명 (예: '2호선', '공항철도')
+            from_stop: 출발 정류장명 (예: '강남')
+            to_stop: 도착 정류장명 (예: '서울대입구')
+
+        Returns:
+            [(lat, lon), ...] 출발~도착 구간 dense polyline
+            매칭 실패 시 빈 리스트
+        """
+        route_ids = self._match_route_ids(route_name)
+        if not route_ids:
+            return []
+
+        best_result = []
+        best_length = float('inf')
+
+        for route_id in route_ids:
+            # shape polyline 확인
+            shape_coords = self._route_id_to_shape.get(route_id)
+            if not shape_coords or len(shape_coords) < 2:
+                continue
+
+            # 정류장 목록에서 from/to 좌표 조회
+            stops = self._route_id_to_stops.get(route_id, [])
+            if not stops:
+                continue
+
+            from_indices = self._find_stop_indices(stops, from_stop)
+            to_indices = self._find_stop_indices(stops, to_stop)
+
+            if not from_indices or not to_indices:
+                continue
+
+            # from/to 정류장 좌표 → shape에서 nearest point 찾기
+            for fi in from_indices:
+                for ti in to_indices:
+                    if fi == ti:
+                        continue
+
+                    _, _, from_lat, from_lon = stops[fi]
+                    _, _, to_lat, to_lon = stops[ti]
+
+                    from_shape_idx = self._nearest_shape_index(
+                        shape_coords, from_lat, from_lon)
+                    to_shape_idx = self._nearest_shape_index(
+                        shape_coords, to_lat, to_lon)
+
+                    if from_shape_idx == to_shape_idx:
+                        continue
+
+                    if from_shape_idx < to_shape_idx:
+                        segment = shape_coords[from_shape_idx:to_shape_idx + 1]
+                    else:
+                        # 순환선 대응
+                        segment = shape_coords[from_shape_idx:] + \
+                                  shape_coords[:to_shape_idx + 1]
+
+                    if len(segment) >= 2 and len(segment) < best_length:
+                        best_length = len(segment)
+                        best_result = segment
 
         return best_result
 

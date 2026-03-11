@@ -888,6 +888,7 @@ def process_date(date: str,
     Returns:
         TCN DataFrame
     """
+    import gc
     print(f"Processing {date} (route-based)...")
 
     # 1. 데이터 로드
@@ -896,6 +897,7 @@ def process_date(date: str,
     print(f"  Loaded TCD: {len(tcd):,} records")
     print(f"  Loaded ROUT: {len(route):,} routes")
     print(f"  Loaded ROUTESTTN: {len(routesttn):,} route-station records")
+    del route; gc.collect()
 
     # 2. 전처리
     preprocessor = TCDPreprocessor()
@@ -904,65 +906,63 @@ def process_date(date: str,
     mask_same_stop = tcd["승차정류장ID(정산사업자)"] == tcd["하차정류장ID(정산사업자)"]
     invalid_trips = tcd.loc[mask_same_stop, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
 
-    tcd_clean = tcd.merge(
+    tcd = tcd.merge(
         invalid_trips, on=["가상카드번호", "트랜잭션ID"],
         how="left", indicator=True
     ).query("_merge == 'left_only'").drop(columns="_merge")
-    print(f"  After removing same O-D: {len(tcd_clean):,} records")
+    del invalid_trips, mask_same_stop; gc.collect()
+    print(f"  After removing same O-D: {len(tcd):,} records")
 
     # 정류장ID NA인 통행 제거 (승차 또는 하차 정류장ID가 NA면 해당 통행 전체 제거)
     sttn_cols = ["승차정류장ID(정산사업자)", "하차정류장ID(정산사업자)"]
-    mask_na_sttn = tcd_clean[sttn_cols].isna().any(axis=1)
-    invalid_na_sttn = tcd_clean.loc[mask_na_sttn, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
+    mask_na_sttn = tcd[sttn_cols].isna().any(axis=1)
+    invalid_na_sttn = tcd.loc[mask_na_sttn, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
 
-    tcd_clean = tcd_clean.merge(
+    tcd = tcd.merge(
         invalid_na_sttn, on=["가상카드번호", "트랜잭션ID"],
         how="left", indicator=True
     ).query("_merge == 'left_only'").drop(columns="_merge")
-    print(f"  After removing NA station ID: {len(tcd_clean):,} records (removed {len(invalid_na_sttn):,} trips)")
+    print(f"  After removing NA station ID: {len(tcd):,} records (removed {len(invalid_na_sttn):,} trips)")
+    del invalid_na_sttn, mask_na_sttn; gc.collect()
 
     # TCD 전처리
-    tcd_pre = preprocessor.preprocess_tcd(tcd_clean)
+    tcd = preprocessor.preprocess_tcd(tcd)
+    gc.collect()
 
-    # ROUTESTTN 전처리 및 병합
+    # ROUTESTTN 전처리 및 병합 — 환승 그래프는 원본 routesttn으로 먼저 생성
+    transfer_graph = SubwayTransferGraph(routesttn)
     routesttn_pre = preprocessor.preprocess_routesttn(routesttn)
-    tcd_merged = preprocessor.merge_tcd_routesttn(tcd_pre, routesttn_pre)
-    tcd_merged = preprocessor.create_trip_id(tcd_merged)
+    del routesttn; gc.collect()
+
+    tcd = preprocessor.merge_tcd_routesttn(tcd, routesttn_pre)
+    del routesttn_pre; gc.collect()
+    tcd = preprocessor.create_trip_id(tcd)
 
     # 좌표 매칭 현황 출력
     coord_cols = ['승차정류장 X 좌표', '승차정류장 Y 좌표', '하차정류장 X 좌표', '하차정류장 Y 좌표']
-    o_matched = tcd_merged['승차정류장 X 좌표'].notna().sum()
-    d_matched = tcd_merged['하차정류장 X 좌표'].notna().sum()
-    print(f"  Route-station match: origin {o_matched:,}/{len(tcd_merged):,} ({o_matched/len(tcd_merged)*100:.1f}%), "
-          f"dest {d_matched:,}/{len(tcd_merged):,} ({d_matched/len(tcd_merged)*100:.1f}%)")
+    o_matched = tcd['승차정류장 X 좌표'].notna().sum()
+    d_matched = tcd['하차정류장 X 좌표'].notna().sum()
+    print(f"  Route-station match: origin {o_matched:,}/{len(tcd):,} ({o_matched/len(tcd)*100:.1f}%), "
+          f"dest {d_matched:,}/{len(tcd):,} ({d_matched/len(tcd)*100:.1f}%)")
 
-    # 좌표 0인 통행 제거 (좌표값이 0이면 해당 통행 전체 제거)
-    mask_zero = (tcd_merged[coord_cols] == 0).any(axis=1)
-    invalid_zero = tcd_merged.loc[mask_zero, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
+    # 좌표 0/NA인 통행 제거 (좌표값이 0이거나 NA이면 해당 통행 전체 제거)
+    mask_bad = (tcd[coord_cols] == 0).any(axis=1) | tcd[coord_cols].isna().any(axis=1)
+    invalid_bad = tcd.loc[mask_bad, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
 
-    tcd_merged = tcd_merged.merge(
-        invalid_zero, on=["가상카드번호", "트랜잭션ID"],
+    tcd = tcd.merge(
+        invalid_bad, on=["가상카드번호", "트랜잭션ID"],
         how="left", indicator=True
     ).query("_merge == 'left_only'").drop(columns="_merge")
-    print(f"  After removing zero coords: {len(tcd_merged):,} records (removed {len(invalid_zero):,} trips)")
+    print(f"  After removing bad coords: {len(tcd):,} records (removed {len(invalid_bad):,} trips)")
+    del invalid_bad, mask_bad; gc.collect()
 
-    # 좌표 NA인 통행 제거 (좌표가 NA이면 해당 통행 전체 제거)
-    mask_na_coords = tcd_merged[coord_cols].isna().any(axis=1)
-    invalid_na_trips = tcd_merged.loc[mask_na_coords, ["가상카드번호", "트랜잭션ID"]].drop_duplicates()
-
-    tcd_final = tcd_merged.merge(
-        invalid_na_trips, on=["가상카드번호", "트랜잭션ID"],
-        how="left", indicator=True
-    ).query("_merge == 'left_only'").drop(columns="_merge")
-    print(f"  After removing NA coords: {len(tcd_final):,} records (removed {len(invalid_na_trips):,} trips)")
-
-    # 3. 지하철 환승 그래프 구축 + TCN 변환
-    transfer_graph = SubwayTransferGraph(routesttn)
+    # 3. TCN 변환
     converter = TCDtoTCNConverter(
         split_round_trip=split_round_trip,
         transfer_graph=transfer_graph
     )
-    tcn = converter.convert(tcd_final)
+    tcn = converter.convert(tcd)
+    del tcd, converter, transfer_graph; gc.collect()
 
     # NaN 제거
     tcn = tcn.dropna().reset_index(drop=True)
