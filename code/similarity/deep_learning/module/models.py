@@ -264,7 +264,7 @@ def load_mnl_beta(coeff_path, scaler):
     Scaled 공간: x' = (x - μ) / σ, V = β·(σ·x' + μ) = (β·σ)·x' + β·μ
     → scaled β = β_raw * σ  (상수항은 softmax에서 상쇄)
     """
-    from .dl_data import MODEL_FEATURES
+    from .data import MODEL_FEATURES
 
     with open(coeff_path, 'r') as f:
         coeff = json.load(f)

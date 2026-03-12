@@ -20,22 +20,22 @@ import torch
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from module.deep_learning.dl_data import (
+from module.data import (
     create_dataloaders, MODEL_FEATURES, FEATURE_LABELS, MAX_ALTS,
 )
-from module.deep_learning.dl_models import (
+from module.models import (
     DNNChoiceModel, TasteNetModel, ResLogitModel,
     ASUDNNModel, LMNLModel, load_mnl_beta,
 )
-from module.deep_learning.dl_train import (
+from module.train import (
     set_seed, train_model, evaluate_model, print_metrics,
 )
 
 ALL_MODELS = ['dnn', 'tastenet', 'reslogit', 'asudnn', 'lmnl']
 
 DATA_DIR_CANDIDATES = [
-    Path(__file__).resolve().parent.parent / 'data' / 'training_set',
-    Path(__file__).resolve().parent / '..' / 'data' / 'training_set',
+    Path(__file__).resolve().parent.parent.parent.parent / 'data' / 'training_set',
+    Path(__file__).resolve().parent / '..' / '..' / '..' / 'data' / 'training_set',
 ]
 
 

@@ -23,7 +23,7 @@ from scipy.optimize import minimize
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 # ── Paths ──────────────────────────────────────────────────────────
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = ROOT / 'data' / 'training_set'
 OUT_DIR = ROOT / 'data' / 'sensitivity'
 OUT_DIR.mkdir(parents=True, exist_ok=True)

@@ -27,9 +27,9 @@ from tqdm import tqdm
 # 모듈 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from module.similarity.gtfs_lookup import GTFSRouteLookup
-from module.similarity.route_features import extract_itinerary_features, extract_trip_context, fix_missing_distances
-from module.similarity.similarity import (
+from module.gtfs_lookup import GTFSRouteLookup
+from module.route_features import extract_itinerary_features, extract_trip_context, fix_missing_distances
+from module.similarity import (
     parse_otp_itinerary,
     parse_smartcard_trip,
     deduplicate_itineraries,
@@ -41,11 +41,11 @@ from module.similarity.similarity import (
 # 설정
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OTP_INPUT_CSV = os.path.join(BASE_DIR, '..', 'data', 'otp', 'input', 'otp_od_input_over13.csv')
-OTP_JSON_PATH = os.path.join(BASE_DIR, '..', 'data', 'otp', 'output', 'similarity.json')
-TCN_DIR = os.path.join(BASE_DIR, '..', 'data', 'tcn')
-OUTPUT_DIR = os.path.join(BASE_DIR, '..', 'data', 'training_set')
-GTFS_DIR = os.path.join(BASE_DIR, '..', 'data', 'gtfs', 'a1')
+OTP_INPUT_CSV = os.path.join(BASE_DIR, '..', '..', 'data', 'otp', 'input', 'otp_od_input_over13.csv')
+OTP_JSON_PATH = os.path.join(BASE_DIR, '..', '..', 'data', 'otp', 'output', 'similarity.json')
+TCN_DIR = os.path.join(BASE_DIR, '..', '..', 'data', 'tcn')
+OUTPUT_DIR = os.path.join(BASE_DIR, '..', '..', 'data', 'training_set')
+GTFS_DIR = os.path.join(BASE_DIR, '..', '..', 'data', 'gtfs', 'a1')
 
 SIMILARITY_THRESHOLD = 0.5
 MIN_CHOICE_SET_SIZE = 2
