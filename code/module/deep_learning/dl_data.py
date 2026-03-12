@@ -159,7 +159,7 @@ class RouteChoiceDataset(Dataset):
 
 
 def create_dataloaders(data_dir='../data/training_set', batch_size=2048,
-                       num_workers=0):
+                       num_workers=0, device='cpu'):
     """Train/Test DataLoader 생성."""
     train_df, test_df = load_and_split(data_dir)
 
@@ -170,13 +170,15 @@ def create_dataloaders(data_dir='../data/training_set', batch_size=2048,
         context_scaler=train_ds.context_scaler,
     )
 
+    use_pin_memory = (device != 'cpu' and torch.cuda.is_available())
+
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=False,
+        num_workers=num_workers, pin_memory=use_pin_memory,
     )
     test_loader = DataLoader(
         test_ds, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=False,
+        num_workers=num_workers, pin_memory=use_pin_memory,
     )
 
     print(f'Train: {len(train_ds):,} ODs, Test: {len(test_ds):,} ODs')

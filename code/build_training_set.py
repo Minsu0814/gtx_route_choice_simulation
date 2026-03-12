@@ -27,6 +27,7 @@ from tqdm import tqdm
 # 모듈 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from module.similarity.gtfs_lookup import GTFSRouteLookup
 from module.similarity.route_features import extract_itinerary_features, extract_trip_context, fix_missing_distances
 from module.similarity.similarity import (
     parse_otp_itinerary,
@@ -44,14 +45,14 @@ OTP_INPUT_CSV = os.path.join(BASE_DIR, '..', 'data', 'otp', 'input', 'otp_od_inp
 OTP_JSON_PATH = os.path.join(BASE_DIR, '..', 'data', 'otp', 'output', 'similarity.json')
 TCN_DIR = os.path.join(BASE_DIR, '..', 'data', 'tcn')
 OUTPUT_DIR = os.path.join(BASE_DIR, '..', 'data', 'training_set')
+GTFS_DIR = os.path.join(BASE_DIR, '..', 'data', 'gtfs', 'a1')
 
-SIMILARITY_THRESHOLD = 0.6
+SIMILARITY_THRESHOLD = 0.5
 MIN_CHOICE_SET_SIZE = 2
 CHECKPOINT_INTERVAL = 2000
 
 SIM_WEIGHTS = {
-    'mode': 0.20, 'sequence': 0.20, 'time': 0.20,
-    'route': 0.30, 'spatial': 0.10,
+    'mode': 0.20, 'route': 0.40, 'sequence': 0.40,
 }
 
 # TCN 매칭에 필요한 컬럼
@@ -80,6 +81,7 @@ ROUTE_FEATURES = [
 # ============================================================
 def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
     """OTP JSON → SQLite 캐시 (메모리 최소화)"""
+    gtfs_lookup = GTFSRouteLookup(GTFS_DIR)
 
     if not force_rebuild and os.path.exists(otp_cache_db):
         if os.path.getmtime(otp_cache_db) >= os.path.getmtime(OTP_JSON_PATH):
@@ -142,10 +144,10 @@ def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
 
             parsed_list = []
             for itin in deduped:
-                parsed = parse_otp_itinerary(itin, gtfs_lookup=None)
+                parsed = parse_otp_itinerary(itin, gtfs_lookup=gtfs_lookup)
                 parsed.pop('route_polyline', None)
                 parsed.pop('shape_polyline', None)
-                parsed.pop('full_stop_coords', None)
+                parsed.pop('full_stop_coords', None)  # 좌표 불필요, full_stops는 캐시에 남김
                 parsed_list.append(parsed)
 
             cache_entry = {
@@ -186,6 +188,7 @@ def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
 # ============================================================
 def run_matching(otp_cache_db, force_rematch=False):
     """날짜별 TCN → OTP 매칭 → 체크포인트 저장"""
+    gtfs_lookup = GTFSRouteLookup(GTFS_DIR)
 
     checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints')
     individual_path = os.path.join(OUTPUT_DIR, 'route_choice_individual.parquet')
@@ -271,7 +274,7 @@ def run_matching(otp_cache_db, force_rematch=False):
             otp_parsed_list = cache['otp_parsed']
 
             for _, sc_row in sc_trips.iterrows():
-                sc_parsed = parse_smartcard_trip(sc_row, gtfs_lookup=None)
+                sc_parsed = parse_smartcard_trip(sc_row, gtfs_lookup=gtfs_lookup)
 
                 scores = []
                 for idx, otp_p in enumerate(otp_parsed_list):
@@ -301,10 +304,10 @@ def run_matching(otp_cache_db, force_rematch=False):
                         'chosen': int(alt_idx == best['idx']),
                         'sim_composite': round(s['composite'], 4),
                         'sim_mode': round(s['mode_score'], 4),
-                        'sim_sequence': round(s['sequence_score'], 4),
-                        'sim_time': round(s['time_score'], 4),
                         'sim_route': round(s['route_score'], 4),
-                        'sim_spatial': round(s['spatial_score'], 4),
+                        'sim_sequence': round(s['sequence_score'], 4),
+                        'sim_time': round(s['time_score'], 4),      # 진단용 (composite 미반영)
+                        'sim_spatial': round(s['spatial_score'], 4),  # 진단용 (composite 미반영)
                     })
 
         match_count += day_match

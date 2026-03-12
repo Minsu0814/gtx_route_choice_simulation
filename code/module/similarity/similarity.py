@@ -1,12 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 OTP-스마트카드 유사도 비교 모듈
-6 Level Similarity Metrics + Composite Score
-
-공간 유사도:
-- 정류장 좌표 점집합 간 평균 Hausdorff 거리 기반
-- OTP boarding/alighting 좌표 vs SC OD+환승 좌표
-- 이상치(환승 찍고 온 점)에 강건, 전반적으로 다른 경로는 잘 구분
+3 Level Composite: mode, route, sequence (GTFS 보정)
+(time, spatial은 진단용으로 계산·보존하되 composite에는 미반영)
 """
 
 import numpy as np
@@ -318,6 +314,9 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
                             shape_seg = shape_seg[1:]
                     shape_polyline.extend(shape_seg)
 
+    # GTFS 보정 정류장 이름 리스트 (sequence 비교용)
+    full_stops = [name for name, lat, lon in full_stop_coords] if full_stop_coords else []
+
     return {
         'modes': modes,
         'transport_category': transport_category,
@@ -325,6 +324,7 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
         'stops': unique_stops,
         'stop_coords': unique_coords,
         'full_stop_coords': full_stop_coords,  # [(name, lat, lon), ...]
+        'full_stops': full_stops,  # [name, ...] GTFS 보정 정류장명 시퀀스
         'shape_polyline': shape_polyline,  # [(lat, lon), ...] from GTFS shapes.txt
         'route_polyline': route_polyline,  # [(lat, lon), ...] from legGeometry
         'total_time': total_time,
@@ -529,6 +529,9 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
                             shape_seg = shape_seg[1:]
                     shape_polyline.extend(shape_seg)
 
+    # GTFS 보정 정류장 이름 리스트 (sequence 비교용)
+    full_stops = [name for name, lat, lon in full_stop_coords] if full_stop_coords else []
+
     return {
         'modes': modes,
         'transport_category': cat if cat and cat not in ('', 'nan', 'unknown') else _mode_set_to_category(modes),
@@ -536,6 +539,7 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
         'stops': stops,
         'stop_coords': stop_coords,  # [(lat, lon), ...] 중간 환승 정류장 좌표
         'full_stop_coords': full_stop_coords,  # [(name, lat, lon), ...]
+        'full_stops': full_stops,  # [name, ...] GTFS 보정 정류장명 시퀀스
         'shape_polyline': shape_polyline,  # [(lat, lon), ...] from GTFS shapes.txt
         'total_time': total_time,
         'routes': routes,
@@ -606,8 +610,8 @@ def compute_sequence_metrics(otp_parsed, sc_parsed):
 
     명칭 기반 비교: OTP from.name과 스마트카드 정류장명칭시퀀스를 직접 비교.
     """
-    otp_stops_raw = otp_parsed['stops']
-    sc_stops_raw = sc_parsed['stops']
+    otp_stops_raw = otp_parsed.get('full_stops') or otp_parsed['stops']
+    sc_stops_raw = sc_parsed.get('full_stops') or sc_parsed['stops']
 
     if not otp_stops_raw and not sc_stops_raw:
         return {
@@ -987,11 +991,9 @@ def compute_composite_similarity(metrics, weights=None):
     """
     if weights is None:
         weights = {
-            'mode': 0.10,
-            'sequence': 0.15,
-            'time': 0.10,
-            'route': 0.15,
-            'spatial': 0.50,
+            'mode': 0.20,
+            'route': 0.40,
+            'sequence': 0.40,
         }
 
     mode_score = metrics.get('mode_jaccard', 0)
@@ -1004,21 +1006,20 @@ def compute_composite_similarity(metrics, weights=None):
 
     spatial_score = metrics.get('polyline_similarity', 0)
 
+    # 3-level composite: mode + route + sequence (time, spatial 제외)
     composite = (
-        weights['mode'] * mode_score +
-        weights['sequence'] * sequence_score +
-        weights['time'] * time_score +
-        weights['route'] * route_score +
-        weights['spatial'] * spatial_score
+        weights.get('mode', 0) * mode_score +
+        weights.get('route', 0) * route_score +
+        weights.get('sequence', 0) * sequence_score
     )
 
     return {
         'composite': composite,
         'mode_score': mode_score,
         'sequence_score': sequence_score,
-        'time_score': time_score,
+        'time_score': time_score,        # 진단용 유지
         'route_score': route_score,
-        'spatial_score': spatial_score,
+        'spatial_score': spatial_score,   # 진단용 유지
     }
 
 
@@ -1037,7 +1038,7 @@ def grade_similarity(composite_score):
 # ============================================================
 # 매칭 함수
 # ============================================================
-def match_smartcard_to_otp(sc_parsed, otp_itineraries, threshold=0.6, gtfs_lookup=None):
+def match_smartcard_to_otp(sc_parsed, otp_itineraries, threshold=0.5, gtfs_lookup=None):
     """
     스마트카드 통행과 OTP 경로 매칭
 

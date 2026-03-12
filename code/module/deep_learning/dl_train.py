@@ -11,7 +11,19 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import time
+import random
 from copy import deepcopy
+
+
+def set_seed(seed=42):
+    """재현성을 위한 시드 설정 (torch, numpy, cudnn)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def weighted_cross_entropy(pred_probs, target_probs, mask, weights):

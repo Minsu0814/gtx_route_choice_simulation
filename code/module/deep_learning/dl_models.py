@@ -169,6 +169,94 @@ class ResLogitModel(nn.Module):
             }
 
 
+class ASUDNNModel(nn.Module):
+    """ASU-DNN: Alternative-Specific Utility DNN.
+
+    대안별 독립 sub-network로 utility 학습.
+    각 대안이 고유한 가중치를 가져 대안 간 이질성 포착.
+    Han et al. (2020), "A neural-embedded discrete choice model"
+
+    Architecture (per alternative):
+        Linear(n_feat→hidden) → ReLU → Dropout → Linear(hidden→1) → utility
+    """
+
+    def __init__(self, n_features, max_alts=5, hidden_dim=32, dropout=0.1):
+        super().__init__()
+        self.max_alts = max_alts
+        self.alt_nets = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(n_features, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+            )
+            for _ in range(max_alts)
+        ])
+
+    def forward(self, X, z, mask):
+        """
+        Args:
+            X:    (batch, MAX_ALTS, n_features)
+            z:    (batch, n_context) — unused
+            mask: (batch, MAX_ALTS)
+        Returns:
+            probs: (batch, MAX_ALTS)
+        """
+        B = X.size(0)
+        V = torch.zeros(B, self.max_alts, device=X.device)
+        for j, net in enumerate(self.alt_nets):
+            V[:, j] = net(X[:, j, :]).squeeze(-1)
+        return masked_softmax(V, mask)
+
+
+class LMNLModel(nn.Module):
+    """L-MNL: Learning MNL.
+
+    DNN이 raw features → latent variables 생성,
+    이를 MNL의 추가 설명변수로 사용.
+    Sifringer et al. (2020), "Enhancing discrete choice models with representation learning"
+
+    Architecture:
+        feature_extractor: Linear(F→32) → ReLU → Linear(32→n_latent)
+        V = X_aug @ beta   where X_aug = [X_original, latent_features]
+    """
+
+    def __init__(self, n_features, n_latent=4, hidden_dim=32, dropout=0.1):
+        super().__init__()
+        self.n_features = n_features
+        self.n_latent = n_latent
+
+        # DNN feature extractor: raw features → latent variables
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(n_features, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, n_latent),
+        )
+
+        # Linear utility: original + latent features → scalar
+        self.beta = nn.Linear(n_features + n_latent, 1, bias=False)
+
+    def forward(self, X, z, mask):
+        """
+        Args:
+            X:    (batch, MAX_ALTS, n_features)
+            z:    (batch, n_context) — unused
+            mask: (batch, MAX_ALTS)
+        Returns:
+            probs: (batch, MAX_ALTS)
+        """
+        latent = self.feature_extractor(X)          # (B, A, n_latent)
+        X_aug = torch.cat([X, latent], dim=-1)      # (B, A, F+n_latent)
+        V = self.beta(X_aug).squeeze(-1)            # (B, A)
+        return masked_softmax(V, mask)
+
+    def get_betas(self):
+        """Linear utility 가중치 반환 (해석용)."""
+        with torch.no_grad():
+            return self.beta.weight.squeeze(0).cpu().numpy()
+
+
 def load_mnl_beta(coeff_path, scaler):
     """MNL β를 StandardScaler 공간으로 변환.
 
