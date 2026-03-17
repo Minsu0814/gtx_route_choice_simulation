@@ -5,6 +5,7 @@ Usage:
     python sensitivity_2d_grid.py --step 0.01
     python sensitivity_2d_grid.py --step 0.05 0.01
     python sensitivity_2d_grid.py --step 0.01 --workers 8
+    python sensitivity_2d_grid.py --step 0.01 --no-cache   # ignore checkpoint, run from scratch
 """
 import argparse
 import time
@@ -27,10 +28,13 @@ ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = ROOT / 'data' / 'training_set'
 OUT_DIR = ROOT / 'data' / 'sensitivity'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+CHECKPOINT_DIR = OUT_DIR / 'checkpoints'
+CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Constants ──────────────────────────────────────────────────────
 BASELINE_THRESHOLD = 0.5
 BASELINE_NORM_DIST = 5000
+MIN_SEQ_GATE = 0.3  # minimum sim_sequence to filter detour/stopover routes
 
 MODEL_FEATURES = [
     'in_vehicle_time_min', 'wait_time_min',
@@ -234,6 +238,8 @@ def run_one_scenario(pre, rt, sq):
     dom_comp = pre.composite_at_dom(w_mode, rt, sq)
     keep = (dom_comp >= BASELINE_THRESHOLD) & pre.valid_prob
     keep &= (pre.sizes >= 2)
+    # minimum sequence gate: filter detour/stopover routes
+    keep &= (pre.sim_seq[pre.dom_idx] >= MIN_SEQ_GATE)
     n_ods = keep.sum()
 
     if n_ods < 100:
@@ -274,55 +280,134 @@ def _worker_fn(args):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  Checkpoint helpers
+# ══════════════════════════════════════════════════════════════════
+def _checkpoint_path(suffix):
+    return CHECKPOINT_DIR / f'ckpt_{suffix}.json'
+
+
+def _load_checkpoint(suffix):
+    """Load checkpoint: returns (results_list, set_of_done_keys)."""
+    path = _checkpoint_path(suffix)
+    if not path.exists():
+        return [], set()
+    with open(path, 'r', encoding='utf-8') as f:
+        results = json.load(f)
+    done = set()
+    for r in results:
+        done.add((round(r['route'], 4), round(r['sequence'], 4)))
+    # Also mark skipped combos
+    skip_path = CHECKPOINT_DIR / f'ckpt_{suffix}_skipped.json'
+    if skip_path.exists():
+        with open(skip_path, 'r', encoding='utf-8') as f:
+            skipped = json.load(f)
+        for s in skipped:
+            done.add((round(s[0], 4), round(s[1], 4)))
+    print(f'Checkpoint loaded: {len(results)} results, {len(done)} total done (from {path.name})')
+    return results, done
+
+
+def _save_checkpoint(results, skipped, suffix):
+    """Atomically save checkpoint (results + skipped combos)."""
+    path = _checkpoint_path(suffix)
+    tmp = path.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, default=str)
+    tmp.replace(path)
+    # Save skipped list too
+    skip_path = CHECKPOINT_DIR / f'ckpt_{suffix}_skipped.json'
+    tmp_skip = skip_path.with_suffix('.tmp')
+    with open(tmp_skip, 'w', encoding='utf-8') as f:
+        json.dump(skipped, f)
+    tmp_skip.replace(skip_path)
+
+
+# ══════════════════════════════════════════════════════════════════
 #  Grid runner
 # ══════════════════════════════════════════════════════════════════
-def run_2d_grid(pre, route_values, sequence_values, step_label, n_workers=1):
+def run_2d_grid(pre, route_values, sequence_values, step_label, n_workers=1, use_cache=True):
+    suffix = f'step{str(step_label.split("=")[1]).replace(".", "")}'
     combos = [(rt, sq) for rt in route_values for sq in sequence_values
               if (1.0 - rt - sq) >= -1e-9]
     total = len(combos)
-    print(f'Running {total} combos ({step_label}), workers={n_workers}')
 
+    # Load checkpoint
     results = []
+    skipped = []
+    done_keys = set()
+    if use_cache:
+        results, done_keys = _load_checkpoint(suffix)
+        # Reconstruct skipped list from checkpoint
+        skip_path = CHECKPOINT_DIR / f'ckpt_{suffix}_skipped.json'
+        if skip_path.exists():
+            with open(skip_path, 'r', encoding='utf-8') as f:
+                skipped = json.load(f)
+
+    remaining = [(rt, sq) for rt, sq in combos
+                 if (round(rt, 4), round(sq, 4)) not in done_keys]
+
+    print(f'Running {len(remaining)}/{total} combos ({step_label}), '
+          f'{len(done_keys)} cached, workers={n_workers}')
+
+    if not remaining:
+        print('All combos already cached — skipping computation.')
+        return results
+
     t_total = time.time()
+    done_count = len(done_keys)
+    ckpt_interval = 5  # save checkpoint every N scenarios
 
     if n_workers <= 1:
-        # Single process — simpler, uses PreIndexed directly
-        for i, (rt, sq) in enumerate(combos):
+        for i, (rt, sq) in enumerate(remaining):
             t0 = time.time()
             r = run_one_scenario(pre, rt, sq)
             elapsed = time.time() - t0
+            done_count += 1
             if r is None:
-                print(f'  [{i+1}/{total}] rt{rt:.2f}_sq{sq:.2f} SKIP  ({elapsed:.0f}s)')
+                skipped.append([rt, sq])
+                print(f'  [{done_count}/{total}] rt{rt:.2f}_sq{sq:.2f} SKIP  ({elapsed:.0f}s)')
             else:
                 results.append(r)
-                print(f'  [{i+1}/{total}] {r["scenario"]} ODs={r["n_ods"]:,} | '
+                print(f'  [{done_count}/{total}] {r["scenario"]} ODs={r["n_ods"]:,} | '
                       f'rho={r["train_rho_sq"]:.4f}/{r["test_rho_sq"]:.4f} | '
                       f'FPR={r["test_fpr"]:.3f} | {elapsed:.0f}s')
+            # Periodic checkpoint
+            if (i + 1) % ckpt_interval == 0:
+                _save_checkpoint(results, skipped, suffix)
+                print(f'    [checkpoint saved: {len(results)} results]')
     else:
-        # Multiprocess
         global _GLOBAL_PRE
         _GLOBAL_PRE = pre
         with ProcessPoolExecutor(max_workers=n_workers, initializer=_init_worker,
                                  initargs=(pre,)) as pool:
-            futures = {pool.submit(_worker_fn, c): c for c in combos}
-            done = 0
+            futures = {pool.submit(_worker_fn, c): c for c in remaining}
+            batch_done = 0
             for fut in as_completed(futures):
-                done += 1
+                batch_done += 1
+                done_count += 1
                 rt, sq = futures[fut]
                 r = fut.result()
                 if r is None:
-                    print(f'  [{done}/{total}] rt{rt:.2f}_sq{sq:.2f} SKIP')
+                    skipped.append([rt, sq])
+                    print(f'  [{done_count}/{total}] rt{rt:.2f}_sq{sq:.2f} SKIP')
                 else:
                     results.append(r)
-                    print(f'  [{done}/{total}] {r["scenario"]} ODs={r["n_ods"]:,} | '
+                    print(f'  [{done_count}/{total}] {r["scenario"]} ODs={r["n_ods"]:,} | '
                           f'rho={r["train_rho_sq"]:.4f}/{r["test_rho_sq"]:.4f} | '
                           f'FPR={r["test_fpr"]:.3f}')
+                if batch_done % ckpt_interval == 0:
+                    _save_checkpoint(results, skipped, suffix)
+                    print(f'    [checkpoint saved: {len(results)} results]')
+
+    # Final checkpoint
+    _save_checkpoint(results, skipped, suffix)
+    print(f'    [final checkpoint saved: {len(results)} results]')
 
     elapsed_total = (time.time() - t_total) / 60
     print(f'\nDone ({step_label}): {len(results)} scenarios, {elapsed_total:.1f} min total')
-    if results:
-        avg = elapsed_total * 60 / len(results)
-        print(f'  Average: {avg:.1f}s per scenario')
+    if remaining:
+        avg = elapsed_total * 60 / len(remaining)
+        print(f'  Average: {avg:.1f}s per scenario (this run)')
     return results
 
 
@@ -455,6 +540,14 @@ def main():
                         help='Grid step sizes (e.g. 0.05 0.01)')
     parser.add_argument('--workers', type=int, default=1,
                         help='Number of parallel workers (default: 1)')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='Ignore checkpoint and run from scratch')
+    parser.add_argument('--route-range', nargs=2, type=float, default=None,
+                        metavar=('MIN', 'MAX'),
+                        help='Route weight range (e.g. --route-range 0.80 1.00)')
+    parser.add_argument('--seq-range', nargs=2, type=float, default=None,
+                        metavar=('MIN', 'MAX'),
+                        help='Sequence weight range (e.g. --seq-range 0.00 0.20)')
     args = parser.parse_args()
 
     # Load data
@@ -471,18 +564,29 @@ def main():
     del df  # free memory
 
     for step in args.step:
-        suffix = f'step{str(step).replace(".", "")}'
-        step_label = f'step={step}'
+        # Range defaults
+        rt_min, rt_max = (args.route_range if args.route_range else [0.0, 1.0])
+        sq_min, sq_max = (args.seq_range if args.seq_range else [0.0, 1.0])
 
-        route_vals = np.round(np.arange(0.10, 0.41, step), 2).tolist()
-        seq_vals = np.round(np.arange(0.0, 0.61, step), 2).tolist()
+        route_vals = np.round(np.arange(rt_min, rt_max + step/2, step), 2).tolist()
+        seq_vals = np.round(np.arange(sq_min, sq_max + step/2, step), 2).tolist()
         total = sum(1 for rt in route_vals for sq in seq_vals if (1.0 - rt - sq) >= -1e-9)
+
+        range_tag = ''
+        if args.route_range or args.seq_range:
+            range_tag = f'_rt{rt_min:.0e}-{rt_max:.0e}_sq{sq_min:.0e}-{sq_max:.0e}'
+            range_tag = f'_rt{str(rt_min).replace(".","")}-{str(rt_max).replace(".","")}_sq{str(sq_min).replace(".","")}-{str(sq_max).replace(".","")}'
+        suffix = f'step{str(step).replace(".", "")}{range_tag}'
+        step_label = f'step={step}'
+        if range_tag:
+            step_label += f', route=[{rt_min},{rt_max}], seq=[{sq_min},{sq_max}]'
 
         print(f'\n{"="*65}')
         print(f'Grid {step_label}: route {len(route_vals)} × sequence {len(seq_vals)} = {total} combos')
         print(f'{"="*65}')
 
-        results = run_2d_grid(pre, route_vals, seq_vals, step_label, args.workers)
+        results = run_2d_grid(pre, route_vals, seq_vals, step_label, args.workers,
+                              use_cache=not args.no_cache)
         # sort by scenario for consistent output
         results.sort(key=lambda r: (r['route'], r['sequence']))
         df_grid = save_results(results, suffix)

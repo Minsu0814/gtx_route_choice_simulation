@@ -6,7 +6,9 @@ Usage:
     python build_training_set.py                    # 전체 실행
     python build_training_set.py --max-ods 1000     # 테스트 (1000 OD)
     python build_training_set.py --force-rebuild     # OTP 캐시 재생성
-    python build_training_set.py --force-rematch     # 매칭 재실행
+    python build_training_set.py --force-rematch     # 매칭 재실행 (체크포인트 유지, 이어서)
+    python build_training_set.py --force-rematch --clean  # 체크포인트 삭제 후 처음부터
+    python build_training_set.py --reweight               # 가중치만 변경 (매칭 안 함, 체크포인트 재활용)
 """
 
 import argparse
@@ -52,7 +54,7 @@ MIN_CHOICE_SET_SIZE = 2
 CHECKPOINT_INTERVAL = 2000
 
 SIM_WEIGHTS = {
-    'mode': 0.20, 'route': 0.40, 'sequence': 0.40,
+    'mode': 0.02, 'route': 0.90, 'sequence': 0.08,
 }
 
 # TCN 매칭에 필요한 컬럼
@@ -186,7 +188,7 @@ def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
 # ============================================================
 # Step 2: TCN × OTP 매칭
 # ============================================================
-def run_matching(otp_cache_db, force_rematch=False):
+def run_matching(otp_cache_db, force_rematch=False, clean=False):
     """날짜별 TCN → OTP 매칭 → 체크포인트 저장"""
     gtfs_lookup = GTFSRouteLookup(GTFS_DIR)
 
@@ -200,6 +202,17 @@ def run_matching(otp_cache_db, force_rematch=False):
         print(f'  {len(training_df):,}행, {training_df["trip_id"].nunique():,} trips, '
               f'{training_df["od_pair"].nunique():,} ODs')
         return training_df
+
+    # --clean: 체크포인트 삭제 후 처음부터
+    if force_rematch and clean:
+        existing_ckpts_clean = glob.glob(os.path.join(checkpoint_dir, 'day_*.parquet'))
+        if existing_ckpts_clean:
+            for f in existing_ckpts_clean:
+                os.remove(f)
+            print(f'force-rematch --clean: 체크포인트 {len(existing_ckpts_clean)}개 삭제')
+        if os.path.exists(individual_path):
+            os.remove(individual_path)
+            print(f'force-rematch --clean: individual 결과 삭제')
 
     tcn_dates = sorted([d for d in os.listdir(TCN_DIR)
                         if os.path.isdir(os.path.join(TCN_DIR, d))])
@@ -262,32 +275,56 @@ def run_matching(otp_cache_db, force_rematch=False):
         day_match = 0
         day_skip = 0
 
+        # batch로 OTP 캐시 pre-fetch (OD별 개별 쿼리 대신)
+        day_od_list = tcn_day['od_pair'].unique().tolist()
+        otp_cache_batch = {}
+        placeholders = ','.join(['?'] * min(len(day_od_list), 999))
+        for chunk_start in range(0, len(day_od_list), 999):
+            chunk = day_od_list[chunk_start:chunk_start + 999]
+            ph = ','.join(['?'] * len(chunk))
+            for row in cache_conn.execute(
+                    f'SELECT od_pair, n_alts, data FROM otp_cache WHERE od_pair IN ({ph})', chunk):
+                otp_cache_batch[row[0]] = (row[1], row[2])
+
         for od_pair, sc_trips in tcn_day.groupby('od_pair'):
-            row = cache_conn.execute(
-                'SELECT n_alts, data FROM otp_cache WHERE od_pair = ?',
-                (od_pair,)).fetchone()
-            if row is None:
+            cached = otp_cache_batch.get(od_pair)
+            if cached is None:
                 continue
-            n_alts = row[0]
-            cache = pickle.loads(row[1])
+            n_alts, cache_blob = cached
+            cache = pickle.loads(cache_blob)
             alt_features = cache['alt_features']
             otp_parsed_list = cache['otp_parsed']
 
-            for _, sc_row in sc_trips.iterrows():
-                sc_parsed = parse_smartcard_trip(sc_row, gtfs_lookup=gtfs_lookup)
+            # (노선명, 정류장시퀀스) 기준 parse+scores 캐싱
+            # 같은 패턴이면 sc_parsed 동일 → scores도 동일
+            score_cache = {}  # cache_key → (scores, best)
+            sc_records = sc_trips.to_dict('records')
+            for sc_dict in sc_records:
+                cache_key = (str(sc_dict.get('노선명', '')),
+                             str(sc_dict.get('정류장명칭시퀀스', '')))
+                if cache_key not in score_cache:
+                    sc_row = pd.Series(sc_dict)
+                    sc_parsed = parse_smartcard_trip(
+                        sc_row, gtfs_lookup=gtfs_lookup)
+                    scores = []
+                    for idx, otp_p in enumerate(otp_parsed_list):
+                        metrics = compute_all_metrics(otp_p, sc_parsed, skip_diagnostics=True)
+                        score_result = compute_composite_similarity(metrics, weights=SIM_WEIGHTS)
+                        scores.append({'idx': idx, **score_result})
+                    best = max(scores, key=lambda x: x['composite'])
+                    score_cache[cache_key] = (scores, best)
 
-                scores = []
-                for idx, otp_p in enumerate(otp_parsed_list):
-                    metrics = compute_all_metrics(otp_p, sc_parsed)
-                    score_result = compute_composite_similarity(metrics, weights=SIM_WEIGHTS)
-                    scores.append({'idx': idx, **score_result})
+            for sc_dict in sc_records:
+                cache_key = (str(sc_dict.get('노선명', '')),
+                             str(sc_dict.get('정류장명칭시퀀스', '')))
+                scores, best = score_cache[cache_key]
 
-                best = max(scores, key=lambda x: x['composite'])
                 if best['composite'] < SIMILARITY_THRESHOLD:
                     day_skip += 1
                     continue
 
                 day_match += 1
+                sc_row = pd.Series(sc_dict)
                 context = extract_trip_context(sc_row)
                 trip_id = f'{od_pair}_{date}_{trip_counter}'
                 trip_counter += 1
@@ -306,9 +343,12 @@ def run_matching(otp_cache_db, force_rematch=False):
                         'sim_mode': round(s['mode_score'], 4),
                         'sim_route': round(s['route_score'], 4),
                         'sim_sequence': round(s['sequence_score'], 4),
-                        'sim_time': round(s['time_score'], 4),      # 진단용 (composite 미반영)
-                        'sim_spatial': round(s['spatial_score'], 4),  # 진단용 (composite 미반영)
+                        'sim_time': round(s['time_score'], 4),
+                        'sim_spatial': round(s['spatial_score'], 4),
                     })
+            del score_cache
+
+        del otp_cache_batch
 
         match_count += day_match
         skip_count += day_skip
@@ -347,6 +387,64 @@ def run_matching(otp_cache_db, force_rematch=False):
     if len(training_df) > 0:
         print(f'  선택상황(trips): {training_df["trip_id"].nunique():,}')
         print(f'  OD pairs: {training_df["od_pair"].nunique():,}')
+
+    return training_df
+
+
+# ============================================================
+# Step 2b: Reweight (매칭 없이 가중치만 재적용)
+# ============================================================
+def run_reweight():
+    """기존 체크포인트에서 개별 점수를 읽고, 새 가중치로 composite/chosen 재계산"""
+    checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints')
+    all_ckpts = sorted(glob.glob(os.path.join(checkpoint_dir, 'day_*.parquet')))
+
+    if not all_ckpts:
+        print('체크포인트 없음! --force-rematch로 먼저 매칭을 실행하세요.')
+        return pd.DataFrame()
+
+    print(f'체크포인트 {len(all_ckpts)}개 로드 중...')
+    training_df = pd.concat(
+        [pd.read_parquet(f) for f in all_ckpts],
+        ignore_index=True,
+    )
+    print(f'  로드 완료: {len(training_df):,}행, {training_df["trip_id"].nunique():,} trips')
+
+    w_mode = SIM_WEIGHTS['mode']
+    w_route = SIM_WEIGHTS['route']
+    w_seq = SIM_WEIGHTS['sequence']
+    print(f'  새 가중치: mode={w_mode}, route={w_route}, seq={w_seq}')
+
+    # 1. composite 재계산
+    training_df['sim_composite'] = (
+        w_mode * training_df['sim_mode']
+        + w_route * training_df['sim_route']
+        + w_seq * training_df['sim_sequence']
+    ).round(4)
+
+    # 2. trip별 best(chosen) 재결정
+    training_df['chosen'] = 0
+    best_idx = training_df.groupby('trip_id')['sim_composite'].idxmax()
+    training_df.loc[best_idx, 'chosen'] = 1
+
+    # 3. threshold 필터: best composite < SIMILARITY_THRESHOLD → trip 제거
+    best_scores = training_df.loc[best_idx, ['trip_id', 'sim_composite']].copy()
+    best_scores.columns = ['trip_id', 'best_composite']
+    fail_trips = best_scores[best_scores['best_composite'] < SIMILARITY_THRESHOLD]['trip_id']
+    n_before = training_df['trip_id'].nunique()
+    training_df = training_df[~training_df['trip_id'].isin(fail_trips)].reset_index(drop=True)
+    n_after = training_df['trip_id'].nunique()
+    print(f'  threshold({SIMILARITY_THRESHOLD}) 필터: {n_before:,} → {n_after:,} trips ({n_before - n_after:,} 제거)')
+
+    # 4. individual 저장
+    individual_path = os.path.join(OUTPUT_DIR, 'route_choice_individual.parquet')
+    training_df.to_parquet(individual_path, index=False)
+    print(f'  individual 저장: {individual_path}')
+
+    print(f'\n=== Reweight 완료 ===')
+    print(f'  총 행: {len(training_df):,}')
+    print(f'  trips: {training_df["trip_id"].nunique():,}')
+    print(f'  ODs: {training_df["od_pair"].nunique():,}')
 
     return training_df
 
@@ -456,7 +554,9 @@ def main():
     parser = argparse.ArgumentParser(description='Build route choice training set')
     parser.add_argument('--max-ods', type=int, default=None, help='테스트용 OD 수 제한')
     parser.add_argument('--force-rebuild', action='store_true', help='OTP 캐시 재생성')
-    parser.add_argument('--force-rematch', action='store_true', help='매칭 재실행')
+    parser.add_argument('--force-rematch', action='store_true', help='매칭 재실행 (체크포인트 유지, 이어서)')
+    parser.add_argument('--clean', action='store_true', help='체크포인트 삭제 후 처음부터 (--force-rematch와 함께)')
+    parser.add_argument('--reweight', action='store_true', help='가중치만 변경 (매칭 안 함, 체크포인트 재활용)')
     args = parser.parse_args()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -466,17 +566,25 @@ def main():
     print('Route Choice Training Set Builder')
     print('=' * 60)
 
-    # Step 1: OTP 캐시
-    print('\n[Step 1] OTP 캐시 빌드')
-    build_otp_cache(otp_cache_db, force_rebuild=args.force_rebuild, max_ods=args.max_ods)
+    if args.reweight:
+        # Reweight 모드: 매칭 없이 가중치만 재적용
+        print('\n[Reweight 모드] 기존 체크포인트에서 가중치 재적용')
+        training_df = run_reweight()
 
-    # Step 2: 매칭
-    print('\n[Step 2] TCN × OTP 매칭')
-    training_df = run_matching(otp_cache_db, force_rematch=args.force_rematch)
+        print('\n[Step 3] OD 집계 + 저장')
+        aggregate_and_save(training_df)
+    else:
+        # Step 1: OTP 캐시
+        print('\n[Step 1] OTP 캐시 빌드')
+        build_otp_cache(otp_cache_db, force_rebuild=args.force_rebuild, max_ods=args.max_ods)
 
-    # Step 3: 집계 + 저장
-    print('\n[Step 3] OD 집계 + 저장')
-    aggregate_and_save(training_df)
+        # Step 2: 매칭
+        print('\n[Step 2] TCN × OTP 매칭')
+        training_df = run_matching(otp_cache_db, force_rematch=args.force_rematch, clean=args.clean)
+
+        # Step 3: 집계 + 저장
+        print('\n[Step 3] OD 집계 + 저장')
+        aggregate_and_save(training_df)
 
     print('\n완료!')
 

@@ -390,7 +390,7 @@ def deduplicate_itineraries(itineraries):
     return deduped
 
 
-def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
+def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None, lightweight=False):
     """
     TCN DataFrame row → 비교용 딕셔너리
 
@@ -398,6 +398,7 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
         trip_row: TCN DataFrame의 한 행
         col_map: 컬럼명 매핑 (인코딩 깨짐 대비, index 기반 fallback)
         gtfs_lookup: GTFSRouteLookup 인스턴스 (None이면 GTFS 확장 안 함)
+        lightweight: True이면 GTFS 확장/좌표 스킵 (속도 최적화, composite 계산에 충분)
 
     Returns:
         dict with keys: modes, transfer_count, stops, total_time,
@@ -475,6 +476,21 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None):
         'd_lat': float(d_lat) if d_lat is not None else None,
         'd_lon': float(d_lon) if d_lon is not None else None,
     }
+
+    if lightweight:
+        return {
+            'modes': modes,
+            'transport_category': cat if cat and cat not in ('', 'nan', 'unknown') else _mode_set_to_category(modes),
+            'transfer_count': transfer_count,
+            'stops': stops,
+            'stop_coords': [],
+            'full_stop_coords': [],
+            'full_stops': [],
+            'shape_polyline': [],
+            'total_time': total_time,
+            'routes': routes,
+            'od_coords': {},
+        }
 
     # 정류장 좌표 시퀀스 → 중간 환승 정류장 좌표 추출
     # 정류장lat/lon시퀀스 = [origin, alight1, alight2, ...], 중간 = [1:-1]
@@ -718,8 +734,10 @@ def compute_time_metrics(otp_parsed, sc_parsed, threshold_sec=1800):
 # ============================================================
 def compute_route_metrics(otp_parsed, sc_parsed):
     """노선 유사도 지표 (명칭 기반 비교)"""
-    otp_routes = set(otp_parsed['routes'])
-    sc_routes = set(sc_parsed['routes'])
+    otp_routes = {_normalize_route_name(r) for r in otp_parsed['routes']}
+    sc_routes = {_normalize_route_name(r) for r in sc_parsed['routes']}
+    otp_routes.discard('')
+    sc_routes.discard('')
 
     if not otp_routes and not sc_routes:
         return {'route_exact': 1.0, 'route_jaccard': 1.0, 'route_main': 1.0}
@@ -733,7 +751,7 @@ def compute_route_metrics(otp_parsed, sc_parsed):
     route_jaccard = intersection / union if union > 0 else 0.0
 
     # 주 노선 일치 (OTP의 main_route가 SC routes에 포함)
-    main_route = otp_parsed.get('main_route', '')
+    main_route = _normalize_route_name(otp_parsed.get('main_route', ''))
     route_main = 1.0 if main_route and main_route in sc_routes else 0.0
 
     return {
@@ -966,15 +984,29 @@ def _compute_transfer_loc_match(otp_parsed, sc_parsed, threshold=500):
 # ============================================================
 # 복합 유사도 점수 (Composite Similarity Score)
 # ============================================================
-def compute_all_metrics(otp_parsed, sc_parsed):
-    """모든 레벨의 유사도 지표 계산"""
+def compute_all_metrics(otp_parsed, sc_parsed, skip_diagnostics=False):
+    """모든 레벨의 유사도 지표 계산
+
+    Args:
+        skip_diagnostics: True이면 composite에 미반영되는 spatial/time 스킵 (속도 최적화)
+    """
     metrics = {}
     metrics.update(compute_mode_metrics(otp_parsed, sc_parsed))
     metrics.update(compute_transfer_metrics(otp_parsed, sc_parsed))
     metrics.update(compute_sequence_metrics(otp_parsed, sc_parsed))
-    metrics.update(compute_time_metrics(otp_parsed, sc_parsed))
     metrics.update(compute_route_metrics(otp_parsed, sc_parsed))
-    metrics.update(compute_spatial_metrics(otp_parsed, sc_parsed))
+    if skip_diagnostics:
+        metrics['time_diff_abs'] = 0.0
+        metrics['time_ratio'] = 0.0
+        metrics['time_band'] = 0.0
+        metrics['time_score'] = 0.0
+        metrics['od_distance_sim'] = 0.0
+        metrics['transfer_loc_match'] = 0.0
+        metrics['polyline_similarity'] = 0.0
+        metrics['spatial_method'] = 'skipped'
+    else:
+        metrics.update(compute_time_metrics(otp_parsed, sc_parsed))
+        metrics.update(compute_spatial_metrics(otp_parsed, sc_parsed))
     return metrics
 
 
