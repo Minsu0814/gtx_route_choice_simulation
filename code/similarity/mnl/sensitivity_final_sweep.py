@@ -1,6 +1,6 @@
 """
 Final Sweep: threshold + sequence gate sensitivity
-Confirmed weights: route=0.90, seq=0.08, mode=0.02
+Confirmed weights: route=0.40, seq=0.21, mode=0.39
 
 Usage:
     python sensitivity_final_sweep.py
@@ -28,9 +28,9 @@ OUT_DIR = ROOT / 'data' / 'sensitivity'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Confirmed weights ─────────────────────────────────────────────
-W_ROUTE = 0.90
-W_SEQ = 0.08
-W_MODE = 0.02
+W_ROUTE = 0.40
+W_SEQ = 0.21
+W_MODE = 0.39
 
 # ── Sweep parameters ──────────────────────────────────────────────
 THRESHOLD_VALUES = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]

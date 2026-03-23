@@ -6,11 +6,14 @@ OTP itinerary에서 경로 선택 모델(MNL/Mixed Logit/NN) 학습용 피처를
 - 시간 분해: total_duration, in_vehicle, walk, wait, access, egress, transfer_walk
 - 거리: total, bus, subway, gtx, walk
 - 구조: num_transfers, num_legs, transport_category, has_bus/train/gtx
-- 비용: fare (모드+거리 기반), generalized_cost (OTP)
+- 비용: fare (모드+거리+버스유형 기반), generalized_cost (OTP)
 - 컨텍스트: od_distance, departure_hour, departure_dow, is_peak
 """
 
+import csv
 import math
+import os
+import re
 import pandas as pd
 
 from .similarity import (
@@ -20,6 +23,28 @@ from .similarity import (
     _mode_set_to_category,
     _haversine,
 )
+
+
+# ============================================================
+# 버스 세부 유형 상수
+# ============================================================
+BUS_TRUNK = 'BUS_TRUNK'           # 간선 (Blue)       — 1,500원
+BUS_BRANCH = 'BUS_BRANCH'         # 지선 (Green)      — 1,500원
+BUS_CIRCULAR = 'BUS_CIRCULAR'     # 순환간선 (Yellow)  — 1,400원
+BUS_VILLAGE = 'BUS_VILLAGE'       # 마을               — 1,200원
+BUS_NIGHT = 'BUS_NIGHT'           # 심야 (N)          — 2,500원
+BUS_EXPRESS = 'BUS_EXPRESS'       # 광역급행 (M-bus)   — 3,000원
+BUS_AIRPORT = 'BUS_AIRPORT'       # 공항리무진 (6xxx)  — 노선별 고정요금
+BUS_INTERCITY = 'BUS_INTERCITY'   # 시외               — 2,500원
+BUS_DEFAULT = 'BUS_TRUNK'         # 분류 불가 시 기본
+
+# KTDB route_type → 대중교통 유형
+# 0: 시내/농어촌/마을, 1: 도시철도/경전철, 2: 해운, 3: 시외버스,
+# 4: 일반철도, 5: 공항리무진버스, 6: 고속철도, 7: 항공, 8: GTX
+KTDB_ROUTE_TYPE_BUS = {0, 3, 5}
+
+# 모듈 레벨 GTFS route_type 룩업 (선택적 로드)
+_ROUTE_TYPE_MAP = {}   # {route_id: route_type_int}
 
 
 # ============================================================
@@ -87,16 +112,130 @@ def fix_missing_distances(itinerary):
 
 
 # ============================================================
-# 요금 설정 (성인 기본) — fare_calc.py 요금 정책 적용
+# GTFS route_type 룩업 로드
+# ============================================================
+def load_bus_type_map(routes_txt_path):
+    """
+    GTFS routes.txt를 읽어 모듈 레벨 route_type 룩업을 초기화한다.
+
+    Args:
+        routes_txt_path: routes.txt 파일 경로
+
+    호출 예:
+        load_bus_type_map('data_sample/gtfs/a1/routes.txt')
+    """
+    global _ROUTE_TYPE_MAP
+    with open(routes_txt_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        _ROUTE_TYPE_MAP = {
+            row['route_id']: int(row['route_type'])
+            for row in reader
+        }
+
+
+# ============================================================
+# 버스 세부 유형 분류
+# ============================================================
+# 마을버스 route_id 패턴: 서울 BR_1100_10X9... (4번째 자리 = 9)
+_RE_SEOUL_VILLAGE = re.compile(r'^BR_\d{4}_\d{3}9')
+# 심야버스 shortName: N + 숫자
+_RE_NIGHT_BUS = re.compile(r'^N\d')
+# M-버스 (경기 광역급행): M + 숫자
+_RE_M_BUS = re.compile(r'^M\d')
+
+
+def _classify_bus_subtype(leg):
+    """
+    OTP BUS leg → 버스 세부 유형 분류.
+
+    분류 우선순위:
+    1. GTFS route_type (3=시외, 5=광역/공항리무진)
+    2. shortName 패턴 (N##=심야, M##=광역급행)
+    3. route_id 패턴 (마을버스)
+    4. shortName 자릿수 (간선 3자리, 지선 4자리, 순환 0x)
+
+    Args:
+        leg: OTP leg dict (mode='BUS')
+
+    Returns:
+        str: BUS_TRUNK / BUS_BRANCH / BUS_CIRCULAR / BUS_VILLAGE /
+             BUS_NIGHT / BUS_EXPRESS / BUS_INTERCITY
+    """
+    route_info = leg.get('route') or {}
+    gtfs_id = route_info.get('gtfsId', '')
+    short_name = _normalize_route_name(route_info.get('shortName', ''))
+
+    # OTP feed prefix 제거 ("1:BR_..." → "BR_...")
+    route_id = gtfs_id.split(':', 1)[-1] if ':' in gtfs_id else gtfs_id
+
+    # 1) GTFS route_type 룩업
+    route_type = _ROUTE_TYPE_MAP.get(route_id)
+    if route_type == 3:
+        return BUS_INTERCITY
+    if route_type == 5:
+        return BUS_AIRPORT
+
+    # 2) shortName 패턴
+    sn = short_name or ''
+    if _RE_NIGHT_BUS.match(sn):
+        return BUS_NIGHT
+    if _RE_M_BUS.match(sn):
+        return BUS_EXPRESS
+
+    # 3) route_id 패턴 — 마을버스 (서울)
+    if _RE_SEOUL_VILLAGE.match(route_id):
+        return BUS_VILLAGE
+
+    # 4) shortName 자릿수 → 간선/지선/순환
+    digits = ''.join(c for c in sn if c.isdigit())
+    if sn.startswith('0') and len(digits) <= 3:
+        return BUS_CIRCULAR
+    if len(digits) >= 4:
+        return BUS_BRANCH
+    if len(digits) == 3:
+        return BUS_TRUNK
+
+    return BUS_DEFAULT
+
+
+# ============================================================
+# 요금 설정 (성인 카드 기준, 2023.08~)
 # ============================================================
 FARE_CFG = {
-    "base_fare": {"BUS": 1500, "SUBWAY": 1550, "GTX": 3200},
+    "base_fare": {
+        # 버스 유형별
+        BUS_TRUNK: 1500,        # 간선
+        BUS_BRANCH: 1500,       # 지선
+        BUS_CIRCULAR: 1400,     # 순환간선
+        BUS_VILLAGE: 1200,      # 마을
+        BUS_NIGHT: 2500,        # 심야
+        BUS_EXPRESS: 3000,      # 광역급행 (M-bus)
+        BUS_AIRPORT: 7000,      # 공항리무진 (노선별 5,000~16,000원, 대표값)
+        BUS_INTERCITY: 2500,    # 시외
+        # 하위호환
+        "BUS": 1500,
+        # 철도
+        "SUBWAY": 1550,
+        "GTX": 3200,
+    },
     "integrated": {
         "base_is_max": True,
         "base_km": 10,
         "block_km": 5,
         "block_won": 100,       # 성인, GTX 미포함
         "block_won_gtx": 250,   # 성인, GTX 포함
+    },
+    "bus_rule": {
+        # 간선/지선/순환/마을 공통
+        "free_km": 10,
+        "block_km": 5,
+        "block_won": 100,
+    },
+    "bus_express_rule": {
+        # 광역버스 단독
+        "free_km": 30,
+        "block_km": 5,
+        "block_won": 100,
     },
     "subway_rule": {
         "free_km": 10,
@@ -117,17 +256,55 @@ FARE_CFG = {
 # ============================================================
 # 요금 계산 내부 함수
 # ============================================================
-def _fare_integrated(bus_km, sub_km, gtx_km):
-    """BUS/SUBWAY/GTX 통합요금: 기본요금=최고 기본요금, 10km 초과 5km당 가산"""
+def _fare_integrated(bus_km, sub_km, gtx_km, bus_subtype=BUS_TRUNK):
+    """
+    통합환승요금: 기본요금 = 이용 수단 중 최고 기본요금, 10km 초과 5km당 가산.
+
+    버스 유형별 기본요금 차이를 반영한다 (마을 1,200 / 광역 3,000 등).
+    """
     cfg = FARE_CFG
-    used = [m for m, k in [("BUS", bus_km), ("SUBWAY", sub_km), ("GTX", gtx_km)] if k > 0]
-    base = (max(cfg["base_fare"][m] for m in used)
-            if cfg["integrated"]["base_is_max"]
+    fare_keys = []
+    if bus_km > 0:
+        fare_keys.append(bus_subtype)
+    if sub_km > 0:
+        fare_keys.append("SUBWAY")
+    if gtx_km > 0:
+        fare_keys.append("GTX")
+
+    base = (max(cfg["base_fare"].get(k, 1500) for k in fare_keys)
+            if cfg["integrated"]["base_is_max"] and fare_keys
             else cfg["base_fare"]["SUBWAY"])
     d_over = max(0.0, bus_km + sub_km + gtx_km - cfg["integrated"]["base_km"])
     blocks = int(d_over // cfg["integrated"]["block_km"])
-    per_block = cfg["integrated"]["block_won_gtx"] if "GTX" in used else cfg["integrated"]["block_won"]
+    per_block = (cfg["integrated"]["block_won_gtx"] if "GTX" in fare_keys
+                 else cfg["integrated"]["block_won"])
     return int(base + blocks * per_block)
+
+
+def _fare_bus_only(bus_km, bus_subtype=BUS_TRUNK):
+    """
+    버스 단독 요금: 유형별 기본요금 + 거리비례 가산.
+
+    - 간선/지선/순환/마을/심야/시외: 10km 초과 5km당 100원
+    - 광역급행(M-bus): 30km 초과 5km당 100원
+    - 공항리무진: 고정요금 (거리비례 없음, 통합환승 미적용)
+    """
+    cfg = FARE_CFG
+    base = cfg["base_fare"].get(bus_subtype, 1500)
+
+    # 공항리무진: 노선별 고정요금, 거리 가산 없음
+    if bus_subtype == BUS_AIRPORT:
+        return int(base)
+
+    if bus_subtype == BUS_EXPRESS:
+        r = cfg["bus_express_rule"]
+    else:
+        r = cfg["bus_rule"]
+
+    d = max(0.0, bus_km)
+    if d <= r["free_km"]:
+        return int(base)
+    return int(base + int((d - r["free_km"]) // r["block_km"]) * r["block_won"])
 
 
 def _fare_subway_only(sub_km):
@@ -160,7 +337,7 @@ def _fare_gtx_only(gtx_km):
 # Leg 모드 분류
 # ============================================================
 def _classify_leg(leg):
-    """OTP leg -> fare_mode/internal_mode/duration/distance 분류 dict"""
+    """OTP leg -> fare_mode/internal_mode/bus_subtype/duration/distance 분류 dict"""
     mode = leg.get('mode', '')
     duration = float(leg.get('duration', 0) or 0)
     distance = float(leg.get('distance', 0) or 0)
@@ -170,20 +347,24 @@ def _classify_leg(leg):
     if mode == 'WALK':
         return {
             'fare_mode': 'WALK', 'internal_mode': 'walk',
+            'bus_subtype': None,
             'duration': duration, 'distance': distance,
             'route_name': '', 'is_transit': False,
         }
 
     is_gtx = any(kw in (route_name or '') for kw in GTX_ROUTE_KEYWORDS)
+    bus_subtype = None
     if is_gtx:
         fare_mode, internal_mode = 'GTX', 'gtx'
     elif mode == 'BUS':
         fare_mode, internal_mode = 'BUS', 'bus'
+        bus_subtype = _classify_bus_subtype(leg)
     else:  # SUBWAY, RAIL, TRAM
         fare_mode, internal_mode = 'SUBWAY', 'train'
 
     return {
         'fare_mode': fare_mode, 'internal_mode': internal_mode,
+        'bus_subtype': bus_subtype,
         'duration': duration, 'distance': distance,
         'route_name': route_name or '', 'is_transit': True,
     }
@@ -249,6 +430,16 @@ def extract_itinerary_features(itinerary):
         longest = max((classified[i] for i in transit_idx), key=lambda c: c['duration'])
         main_route = longest['route_name']
 
+    # 버스 유형 (가장 비싼 기본요금의 subtype)
+    bus_subtypes = [c['bus_subtype'] for c in classified if c['bus_subtype']]
+    if bus_subtypes:
+        bus_subtype = max(
+            bus_subtypes,
+            key=lambda s: FARE_CFG["base_fare"].get(s, 0),
+        )
+    else:
+        bus_subtype = None
+
     # --- 요금 ---
     fare = calc_fare_from_itinerary(itinerary)
     generalized_cost = float(itinerary.get('generalizedCost', 0) or 0)
@@ -275,6 +466,7 @@ def extract_itinerary_features(itinerary):
         'has_train': int('train' in mode_set),
         'has_gtx': int('gtx' in mode_set),
         'main_route': main_route,
+        'bus_subtype': bus_subtype,
     }
 
 
@@ -343,7 +535,8 @@ def calc_fare_from_itinerary(itinerary):
     OTP itinerary -> 요금 (원)
 
     모드별 거리를 합산하여 통합/단독 요금 규칙을 적용한다.
-    GTX 판별: route shortName에 GTX/290 키워드 포함 여부
+    버스 유형(간선/지선/마을/심야/광역 등)에 따라 기본요금이 다르다.
+    공항리무진은 통합환승 미적용 → 별도 고정요금 합산.
 
     Args:
         itinerary: OTP itinerary dict
@@ -353,6 +546,10 @@ def calc_fare_from_itinerary(itinerary):
     """
     legs = itinerary.get('legs', [])
     bus_d = sub_d = gtx_d = 0.0
+    airport_fare = 0  # 공항리무진 별도 합산
+    # 통합환승 대상 버스 중 가장 비싼 기본요금의 유형을 대표로 사용
+    best_bus_subtype = BUS_DEFAULT
+    best_bus_base = 0
 
     for leg in legs:
         mode = leg.get('mode', '')
@@ -366,7 +563,16 @@ def calc_fare_from_itinerary(itinerary):
         if is_gtx:
             gtx_d += distance
         elif mode == 'BUS':
-            bus_d += distance
+            subtype = _classify_bus_subtype(leg)
+            if subtype == BUS_AIRPORT:
+                # 공항리무진: 통합환승 미적용, 고정요금 별도
+                airport_fare += FARE_CFG["base_fare"][BUS_AIRPORT]
+            else:
+                bus_d += distance
+                sub_base = FARE_CFG["base_fare"].get(subtype, 1500)
+                if sub_base > best_bus_base:
+                    best_bus_base = sub_base
+                    best_bus_subtype = subtype
         else:  # SUBWAY, RAIL, TRAM
             sub_d += distance
 
@@ -374,12 +580,16 @@ def calc_fare_from_itinerary(itinerary):
     has_bus, has_sub, has_gtx = bus_km > 0, sub_km > 0, gtx_km > 0
     used = sum([has_bus, has_sub, has_gtx])
 
+    # 통합환승 대상 수단 요금 계산
     if used >= 2:
-        return _fare_integrated(bus_km, sub_km, gtx_km)
-    if has_gtx:
-        return _fare_gtx_only(gtx_km)
-    if has_sub:
-        return _fare_subway_only(sub_km)
-    if has_bus:
-        return FARE_CFG['base_fare']['BUS']
-    return 0
+        integrated = _fare_integrated(bus_km, sub_km, gtx_km, best_bus_subtype)
+    elif has_gtx:
+        integrated = _fare_gtx_only(gtx_km)
+    elif has_sub:
+        integrated = _fare_subway_only(sub_km)
+    elif has_bus:
+        integrated = _fare_bus_only(bus_km, best_bus_subtype)
+    else:
+        integrated = 0
+
+    return integrated + airport_fare

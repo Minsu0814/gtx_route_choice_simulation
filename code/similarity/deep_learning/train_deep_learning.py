@@ -103,7 +103,7 @@ def print_comparison_table(results, mnl_results):
     # MNL baseline
     if mnl_results:
         ts = mnl_results.get('train_stats', {})
-        print(f'{"MNL":<12} {ts.get("rho_squared", 0):>8.4f} {"—":>10} {"—":>10} {"—":>8} {ts.get("ll_beta", 0):>14.0f}')
+        print(f'{"MNL":<12} {ts.get("rho_squared", 0):>8.4f} {"-":>10} {"-":>10} {"-":>8} {ts.get("ll_beta", 0):>14.0f}')
 
     # DL models
     for name, metrics in results.items():
@@ -163,7 +163,7 @@ def main():
     data_dir = resolve_data_dir(args.data_dir)
 
     print('=' * 60)
-    print('Deep Learning Route Choice — Training')
+    print('Deep Learning Route Choice - Training')
     print('=' * 60)
     print(f'  Models:     {", ".join(args.models)}')
     print(f'  Device:     {device}')
@@ -193,7 +193,7 @@ def main():
         mnl_beta = load_mnl_beta(str(coeff_path), train_ds.scaler)
         print(f'  MNL ρ² = {mnl_results["train_stats"]["rho_squared"]:.4f}')
     else:
-        print('  MNL coefficients not found — ResLogit will use zero init')
+        print('  MNL coefficients not found - ResLogit will use zero init')
 
     # Train models
     print(f'\n[3/4] Training {len(args.models)} model(s)...')
@@ -202,9 +202,9 @@ def main():
     t_total = time.time()
 
     for model_name in args.models:
-        print(f'\n{"─" * 60}')
+        print(f'\n{"-" * 60}')
         print(f'Training: {model_name.upper()}')
-        print(f'{"─" * 60}')
+        print(f'{"-" * 60}')
 
         model = build_model(model_name, n_features, n_context, mnl_beta)
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

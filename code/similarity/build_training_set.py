@@ -30,7 +30,7 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from module.gtfs_lookup import GTFSRouteLookup
-from module.route_features import extract_itinerary_features, extract_trip_context, fix_missing_distances
+from module.route_features import extract_itinerary_features, extract_trip_context, fix_missing_distances, load_bus_type_map
 from module.similarity import (
     parse_otp_itinerary,
     parse_smartcard_trip,
@@ -54,7 +54,7 @@ MIN_CHOICE_SET_SIZE = 2
 CHECKPOINT_INTERVAL = 2000
 
 SIM_WEIGHTS = {
-    'mode': 0.02, 'route': 0.90, 'sequence': 0.08,
+    'mode': 0.39, 'route': 0.40, 'sequence': 0.21,
 }
 
 # TCN 매칭에 필요한 컬럼
@@ -75,6 +75,7 @@ ROUTE_FEATURES = [
     'subway_distance', 'gtx_distance',
     'num_transfers', 'num_legs', 'fare', 'generalized_cost',
     'transport_category', 'has_bus', 'has_train', 'has_gtx', 'main_route',
+    'bus_subtype',
 ]
 
 
@@ -84,6 +85,7 @@ ROUTE_FEATURES = [
 def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
     """OTP JSON → SQLite 캐시 (메모리 최소화)"""
     gtfs_lookup = GTFSRouteLookup(GTFS_DIR)
+    load_bus_type_map(os.path.join(GTFS_DIR, 'routes.txt'))
 
     if not force_rebuild and os.path.exists(otp_cache_db):
         if os.path.getmtime(otp_cache_db) >= os.path.getmtime(OTP_JSON_PATH):
@@ -191,6 +193,7 @@ def build_otp_cache(otp_cache_db, force_rebuild=False, max_ods=None):
 def run_matching(otp_cache_db, force_rematch=False, clean=False):
     """날짜별 TCN → OTP 매칭 → 체크포인트 저장"""
     gtfs_lookup = GTFSRouteLookup(GTFS_DIR)
+    load_bus_type_map(os.path.join(GTFS_DIR, 'routes.txt'))
 
     checkpoint_dir = os.path.join(OUTPUT_DIR, 'checkpoints')
     individual_path = os.path.join(OUTPUT_DIR, 'route_choice_individual.parquet')

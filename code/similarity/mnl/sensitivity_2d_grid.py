@@ -36,21 +36,24 @@ BASELINE_THRESHOLD = 0.5
 BASELINE_NORM_DIST = 5000
 MIN_SEQ_GATE = 0.3  # minimum sim_sequence to filter detour/stopover routes
 
+# K1 사양: 모드별 IVT + log(walk) + no distance/wait
 MODEL_FEATURES = [
-    'in_vehicle_time_min', 'wait_time_min',
-    'access_time_min', 'egress_time_min', 'transfer_walk_time_min',
-    'total_distance_km', 'num_transfers', 'fare',
+    'bus_ivt_min', 'train_ivt_min', 'gtx_ivt_min',
+    'ln_access', 'ln_egress',
+    'transfer_walk_time_min',
+    'num_transfers', 'fare_1000won',
     'has_bus', 'has_train', 'has_gtx',
 ]
 N_FEAT = len(MODEL_FEATURES)
 SIGN_CONSTRAINED = {
-    'in_vehicle_time_min', 'wait_time_min',
-    'access_time_min', 'egress_time_min', 'transfer_walk_time_min',
-    'total_distance_km', 'num_transfers', 'fare',
+    'bus_ivt_min', 'train_ivt_min', 'gtx_ivt_min',
+    'ln_access', 'ln_egress',
+    'transfer_walk_time_min',
+    'num_transfers', 'fare_1000won',
 }
 BOUNDS = [(None, 0) if f in SIGN_CONSTRAINED else (None, None) for f in MODEL_FEATURES]
-KEY_BETAS = ['in_vehicle_time_min', 'access_time_min', 'num_transfers', 'has_bus', 'has_train']
-KEY_LABELS = ['beta_IVT', 'beta_access', 'beta_transfers', 'beta_bus', 'beta_train']
+KEY_BETAS = ['bus_ivt_min', 'train_ivt_min', 'gtx_ivt_min', 'ln_access', 'num_transfers', 'has_train']
+KEY_LABELS = ['beta_bus_IVT', 'beta_train_IVT', 'beta_gtx_IVT', 'beta_ln_access', 'beta_transfers', 'beta_train']
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -350,7 +353,7 @@ def run_2d_grid(pre, route_values, sequence_values, step_label, n_workers=1, use
           f'{len(done_keys)} cached, workers={n_workers}')
 
     if not remaining:
-        print('All combos already cached — skipping computation.')
+        print('All combos already cached - skipping computation.')
         return results
 
     t_total = time.time()
@@ -416,7 +419,7 @@ def run_2d_grid(pre, route_values, sequence_values, step_label, n_workers=1, use
 # ══════════════════════════════════════════════════════════════════
 CSV_COLS = ['scenario', 'route', 'sequence', 'mode_weight', 'n_ods',
             'train_rho_sq', 'test_rho_sq', 'test_fpr', 'test_rmse',
-            'beta_IVT', 'beta_access', 'beta_transfers', 'beta_bus', 'beta_train',
+            'beta_bus_IVT', 'beta_train_IVT', 'beta_ln_access', 'beta_transfers', 'beta_train',
             'converged']
 
 
@@ -508,7 +511,7 @@ def print_robustness(df_grid, label):
     rho_vals = df_grid['test_rho_sq'].values
     fpr_vals = df_grid['test_fpr'].values
     print('=' * 65)
-    print(f'2D Grid Robustness — {label}  ({len(df_grid)} scenarios)')
+    print(f'2D Grid Robustness - {label}  ({len(df_grid)} scenarios)')
     print('=' * 65)
     print(f'rho2: [{rho_vals.min():.4f}, {rho_vals.max():.4f}]  '
           f'spread={rho_vals.max() - rho_vals.min():.4f}')
@@ -551,13 +554,50 @@ def main():
     args = parser.parse_args()
 
     # Load data
+    import sqlite3
+    import pickle
+
     print('Loading data...')
     df = pd.read_parquet(DATA_DIR / 'route_choice_training.parquet')
     print(f'{len(df):,} rows, {df["od_pair"].nunique():,} ODs')
 
-    for col in ['in_vehicle_time', 'wait_time', 'access_time', 'egress_time', 'transfer_walk_time']:
+    # K1 피처 생성: 모드별 IVT
+    if 'alt_idx' not in df.columns:
+        df['alt_idx'] = df.groupby('od_pair').cumcount()
+    training_ods = set(df['od_pair'].unique())
+    conn = sqlite3.connect(str(DATA_DIR / 'otp_cache.db'))
+    ivt_records = []
+    for od_pair, blob in conn.execute('SELECT od_pair, data FROM otp_cache'):
+        if od_pair not in training_ods:
+            continue
+        data = pickle.loads(blob)
+        for i, p in enumerate(data['otp_parsed']):
+            bus_ivt = train_ivt = gtx_ivt = 0.0
+            for leg in p.get('transit_legs', []):
+                mode = leg.get('mode', '')
+                dur = float(leg.get('duration', 0))
+                if mode == 'BUS':
+                    bus_ivt += dur
+                elif mode == 'GTX':
+                    gtx_ivt += dur
+                else:
+                    train_ivt += dur
+            ivt_records.append((od_pair, i, bus_ivt / 60, train_ivt / 60, gtx_ivt / 60))
+    conn.close()
+    ivt_df = pd.DataFrame(ivt_records, columns=['od_pair', 'alt_idx', 'bus_ivt_min', 'train_ivt_min', 'gtx_ivt_min'])
+    df = df.merge(ivt_df, on=['od_pair', 'alt_idx'], how='left')
+    df['bus_ivt_min'] = df['bus_ivt_min'].fillna(0)
+    df['train_ivt_min'] = df['train_ivt_min'].fillna(0)
+    df['gtx_ivt_min'] = df['gtx_ivt_min'].fillna(0)
+    del ivt_records, ivt_df
+    print(f'모드별 IVT 추출 완료')
+
+    # K1 피처 생성: log walk, fare
+    for col in ['access_time', 'egress_time', 'transfer_walk_time']:
         df[col + '_min'] = df[col] / 60
-    df['total_distance_km'] = df['total_distance'] / 1000
+    df['ln_access'] = np.log1p(df['access_time_min'])
+    df['ln_egress'] = np.log1p(df['egress_time_min'])
+    df['fare_1000won'] = df['fare'] / 1000
 
     # Build pre-indexed structure ONCE
     pre = PreIndexed(df)

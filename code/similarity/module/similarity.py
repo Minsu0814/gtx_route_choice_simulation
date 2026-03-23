@@ -284,7 +284,7 @@ def parse_otp_itinerary(itinerary, gtfs_lookup=None):
     full_stop_coords = []
     shape_polyline = []
     if gtfs_lookup and unique_stops and len(unique_stops) >= 2:
-        route_list = [tl['route_name'] for tl in transit_legs]
+        route_list = [tl['route_name'].strip() for tl in transit_legs]
         for leg_idx in range(len(route_list)):
             from_stop = unique_stops[leg_idx] if leg_idx < len(unique_stops) else None
             to_stop = unique_stops[leg_idx + 1] if (leg_idx + 1) < len(unique_stops) else None
@@ -519,7 +519,7 @@ def parse_smartcard_trip(trip_row, col_map=None, gtfs_lookup=None, lightweight=F
         for leg_idx in range(len(routes)):
             from_stop = stops[leg_idx] if leg_idx < len(stops) else None
             to_stop = stops[leg_idx + 1] if (leg_idx + 1) < len(stops) else None
-            route_name = routes[leg_idx] if leg_idx < len(routes) else None
+            route_name = routes[leg_idx].strip() if leg_idx < len(routes) else None
 
             if from_stop and to_stop and route_name:
                 # 정류장 시퀀스 확장 (기존)
