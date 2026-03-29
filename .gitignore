@@ -41,3 +41,4 @@ logs/
 
 # Claude Code local settings
 # .claude/settings.local.json
+data_sample/otp/output/similarity.json
