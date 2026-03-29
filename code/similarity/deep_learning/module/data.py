@@ -15,22 +15,22 @@ from sklearn.preprocessing import StandardScaler
 
 MAX_ALTS = 5
 
-# MNL과 동일한 11개 피처
+# MNL K3 사양과 동일한 9개 피처
 MODEL_FEATURES = [
-    'in_vehicle_time_min', 'wait_time_min',
-    'access_time_min', 'egress_time_min', 'transfer_walk_time_min',
-    'total_distance_km',
+    'total_ivt_min',
+    'ln_access', 'ln_egress',
+    'transfer_walk_time_min',
     'num_transfers',
-    'fare',
+    'fare_1000won',
     'has_bus', 'has_train', 'has_gtx',
 ]
 
 FEATURE_LABELS = [
-    'IVT (min)', 'Wait (min)',
-    'Access walk (min)', 'Egress walk (min)', 'Transfer walk (min)',
-    'Total dist (km)',
+    'Total IVT (min)',
+    'ln(1+Access walk)', 'ln(1+Egress walk)',
+    'Transfer walk (min)',
     'Transfers',
-    'Fare (KRW)',
+    'Fare (1000won)',
     'Has bus', 'Has train', 'Has GTX',
 ]
 
@@ -43,12 +43,14 @@ def load_and_split(data_dir='../../../data/training_set', test_size=0.2, random_
     data_path = Path(data_dir) / 'route_choice_training.parquet'
     df = pd.read_parquet(data_path)
 
-    # 파생 피처 생성
-    time_raw = ['in_vehicle_time', 'wait_time', 'access_time',
-                'egress_time', 'transfer_walk_time']
-    for col in time_raw:
+    # 파생 피처 생성 (K3 사양)
+    for col in ['access_time', 'egress_time', 'transfer_walk_time']:
         df[col + '_min'] = df[col] / 60
-    df['total_distance_km'] = df['total_distance'] / 1000
+    df['in_vehicle_time_min'] = df['in_vehicle_time'] / 60
+    df['total_ivt_min'] = df['in_vehicle_time_min']  # 통합 IVT
+    df['ln_access'] = np.log1p(df['access_time_min'])
+    df['ln_egress'] = np.log1p(df['egress_time_min'])
+    df['fare_1000won'] = df['fare'] / 1000
 
     # Context features
     if 'od_distance' in df.columns:
@@ -78,6 +80,12 @@ def load_and_split(data_dir='../../../data/training_set', test_size=0.2, random_
     train_od_set = set(train_ods)
     test_od_set = set(test_ods)
 
+    # GTX OD 보정: 9007↔9008은 반드시 test로 이동 (MNL과 동일)
+    gtx_move_to_test = ['9007_9008', '9008_9007']
+    for od in gtx_move_to_test:
+        train_od_set.discard(od)
+        test_od_set.add(od)
+
     train_df = df[df['od_pair'].isin(train_od_set)].copy()
     test_df = df[df['od_pair'].isin(test_od_set)].copy()
 
@@ -97,8 +105,10 @@ class RouteChoiceDataset(Dataset):
         weight: scalar — n_total (가중치)
     """
 
-    def __init__(self, df, scaler=None, context_scaler=None, fit_scaler=False):
-        self.n_features = len(MODEL_FEATURES)
+    def __init__(self, df, scaler=None, context_scaler=None, fit_scaler=False,
+                 features=None):
+        features = features or MODEL_FEATURES
+        self.n_features = len(features)
         self.n_context = len(CONTEXT_FEATURES)
 
         # choice_prob 합이 1이 아닌 OD 제거 (벡터화)
@@ -114,7 +124,7 @@ class RouteChoiceDataset(Dataset):
         self.n_groups = len(od_uniq)
 
         # Scaler fitting (벡터화)
-        X_all = np.array(df_valid[MODEL_FEATURES].values, dtype=np.float64)
+        X_all = np.array(df_valid[features].values, dtype=np.float64)
         if fit_scaler:
             self.scaler = StandardScaler().fit(X_all)
         else:
@@ -158,16 +168,34 @@ class RouteChoiceDataset(Dataset):
                 self.mask[idx], self.weight[idx])
 
 
+def print_mode_share(train_df, test_df):
+    """Train/Test 수단 분담률 출력."""
+    for label, df in [('Train', train_df), ('Test', test_df)]:
+        # 가중 분담률: choice_prob * n_total
+        df_tmp = df.copy()
+        df_tmp['weighted'] = df_tmp['choice_prob'] * df_tmp['n_total']
+        share = df_tmp.groupby('transport_category')['weighted'].sum()
+        share = (share / share.sum() * 100).sort_values(ascending=False)
+        n_ods = df['od_pair'].nunique()
+        print(f'\n  {label} mode share ({n_ods:,} ODs):')
+        for cat, pct in share.items():
+            print(f'    {cat:<20s} {pct:5.1f}%')
+
+
 def create_dataloaders(data_dir='../../../data/training_set', batch_size=2048,
-                       num_workers=0, device='cpu'):
+                       num_workers=0, device='cpu', features=None):
     """Train/Test DataLoader 생성."""
     train_df, test_df = load_and_split(data_dir)
 
-    train_ds = RouteChoiceDataset(train_df, fit_scaler=True)
+    print_mode_share(train_df, test_df)
+
+    features = features or MODEL_FEATURES
+    train_ds = RouteChoiceDataset(train_df, fit_scaler=True, features=features)
     test_ds = RouteChoiceDataset(
         test_df,
         scaler=train_ds.scaler,
         context_scaler=train_ds.context_scaler,
+        features=features,
     )
 
     use_pin_memory = (device != 'cpu' and torch.cuda.is_available())
@@ -181,8 +209,9 @@ def create_dataloaders(data_dir='../../../data/training_set', batch_size=2048,
         num_workers=num_workers, pin_memory=use_pin_memory,
     )
 
-    print(f'Train: {len(train_ds):,} ODs, Test: {len(test_ds):,} ODs')
-    print(f'Features: {train_ds.n_features}, Context: {train_ds.n_context}')
-    print(f'Batch size: {batch_size}')
+    print(f'\n  Train: {len(train_ds):,} ODs, Test: {len(test_ds):,} ODs')
+    feat_names = [f for f in features]
+    print(f'  Features ({len(features)}): {", ".join(feat_names)}')
+    print(f'  Batch size: {batch_size}')
 
     return train_loader, test_loader, train_ds, test_ds

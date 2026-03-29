@@ -257,7 +257,7 @@ class LMNLModel(nn.Module):
             return self.beta.weight.squeeze(0).cpu().numpy()
 
 
-def load_mnl_beta(coeff_path, scaler):
+def load_mnl_beta(coeff_path, scaler, features=None):
     """MNL β를 StandardScaler 공간으로 변환.
 
     원본 β는 raw feature 공간: V = β·x
@@ -265,11 +265,12 @@ def load_mnl_beta(coeff_path, scaler):
     → scaled β = β_raw * σ  (상수항은 softmax에서 상쇄)
     """
     from .data import MODEL_FEATURES
+    features = features or MODEL_FEATURES
 
-    with open(coeff_path, 'r') as f:
+    with open(coeff_path, 'r', encoding='utf-8') as f:
         coeff = json.load(f)
 
-    beta_raw = np.array([coeff['beta'][f] for f in MODEL_FEATURES], dtype=np.float32)
+    beta_raw = np.array([coeff['beta'][f] for f in features], dtype=np.float32)
     sigma = scaler.scale_.astype(np.float32)
     beta_scaled = beta_raw * sigma
 

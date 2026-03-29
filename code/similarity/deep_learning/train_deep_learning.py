@@ -86,7 +86,7 @@ def load_mnl_results(data_dir):
     coeff_path = Path(data_dir) / 'mnl_coefficients.json'
     if not coeff_path.exists():
         return None
-    with open(coeff_path, 'r') as f:
+    with open(coeff_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -117,6 +117,99 @@ def print_comparison_table(results, mnl_results):
         )
 
     print(f'{"=" * 80}')
+
+
+def extract_and_save_betas(model, model_name, features, scaler, context_scaler,
+                           metrics, data_dir, test_ds=None):
+    """모델에서 β 추출 → JSON 저장 (MNL과 동일 포맷).
+
+    - TasteNet/ResLogit/L-MNL: 직접 β 추출
+    - DNN/ASU-DNN: gradient 기반 pseudo-β (test_ds 필요)
+    """
+    sigma = scaler.scale_.astype(np.float64)
+
+    betas_scaled = None
+    method = 'direct'
+    model_cpu = model.cpu()
+    model_cpu.eval()
+
+    if model_name == 'tastenet':
+        z_mean = torch.zeros(1, len(context_scaler.mean_))
+        betas_scaled = model_cpu.get_betas(z_mean).squeeze(0).numpy().astype(np.float64)
+    elif model_name == 'reslogit':
+        betas_scaled = model_cpu.beta_mnl.detach().numpy().astype(np.float64)
+    elif model_name == 'lmnl':
+        all_weights = model_cpu.get_betas()
+        betas_scaled = all_weights[:len(features)].astype(np.float64)
+    elif model_name in ('dnn', 'asudnn') and test_ds is not None:
+        method = 'gradient'
+        betas_scaled = _compute_gradient_betas(model_cpu, test_ds, len(features))
+    else:
+        return
+
+    betas_raw = betas_scaled / sigma
+    _save_beta_json(model_name, features, betas_scaled, betas_raw, metrics,
+                    data_dir, method=method)
+
+
+def _compute_gradient_betas(model, test_ds, n_features):
+    """Test set 평균 gradient ∂V/∂x 계산 → pseudo-β (scaled space)."""
+    grad_sum = np.zeros(n_features, dtype=np.float64)
+    n_valid = 0
+    batch_size = 4096
+
+    for start in range(0, len(test_ds), batch_size):
+        end = min(start + batch_size, len(test_ds))
+        X_batch = test_ds.X[start:end].clone()
+        z_batch = test_ds.z[start:end]
+        mask_batch = test_ds.mask[start:end]
+
+        X_batch.requires_grad_(True)
+        probs = model(X_batch, z_batch, mask_batch)
+
+        # 최대 확률 대안에 대한 gradient
+        chosen = probs.argmax(dim=-1)
+        chosen_probs = probs[torch.arange(len(chosen)), chosen]
+        chosen_probs.sum().backward()
+
+        grad = X_batch.grad
+        valid_mask = mask_batch.unsqueeze(-1).bool()
+        grad_masked = grad * valid_mask.float()
+
+        grad_sum += grad_masked.sum(dim=(0, 1)).detach().numpy().astype(np.float64)
+        n_valid += valid_mask.sum().item() // n_features
+
+    return grad_sum / n_valid
+
+
+def _save_beta_json(model_name, features, betas_scaled, betas_raw, metrics,
+                    data_dir, method='direct'):
+    """β를 JSON으로 저장."""
+    beta_dict = {f: float(betas_raw[i]) for i, f in enumerate(features)}
+
+    dtumos = {
+        'beta_time': beta_dict.get('total_ivt_min', 0.0),
+        'beta_cost': beta_dict.get('fare_1000won', 0.0),
+        'beta_walk_access_log': beta_dict.get('ln_access', 0.0),
+        'beta_walk_egress_log': beta_dict.get('ln_egress', 0.0),
+        'beta_walk_transfer': beta_dict.get('transfer_walk_time_min', 0.0),
+        'beta_transfer': beta_dict.get('num_transfers', 0.0),
+    }
+
+    out = {
+        'model': model_name.upper(),
+        'method': method,
+        'features': features,
+        'beta': beta_dict,
+        'beta_scaled': {f: float(betas_scaled[i]) for i, f in enumerate(features)},
+        'rho_squared': float(metrics['rho_sq']),
+        'dtumos_mapping': dtumos,
+    }
+
+    out_path = Path(data_dir) / f'{model_name}_coefficients.json'
+    with open(out_path, 'w') as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    print(f'  Betas ({method}) saved to {out_path}')
 
 
 def save_results(results, data_dir):
@@ -155,12 +248,18 @@ def main():
     parser.add_argument('--device', default='auto', choices=['cpu', 'cuda', 'auto'], help='Device (default: auto)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
     parser.add_argument('--data-dir', default=None, help='Training data directory')
+    parser.add_argument('--no-fare', action='store_true', help='Exclude fare from features')
     args = parser.parse_args()
 
     # Setup
     set_seed(args.seed)
     device = resolve_device(args.device)
     data_dir = resolve_data_dir(args.data_dir)
+
+    # Feature selection
+    features = list(MODEL_FEATURES)
+    if args.no_fare:
+        features = [f for f in features if f != 'fare']
 
     print('=' * 60)
     print('Deep Learning Route Choice - Training')
@@ -173,12 +272,14 @@ def main():
     print(f'  Patience:   {args.patience}')
     print(f'  Seed:       {args.seed}')
     print(f'  Data dir:   {data_dir}')
+    print(f'  Fare:       {"excluded" if args.no_fare else "included"}')
     print()
 
     # Load data
     print('[1/4] Loading data...')
     train_loader, test_loader, train_ds, test_ds = create_dataloaders(
         data_dir=data_dir, batch_size=args.batch_size, device=device,
+        features=features,
     )
 
     n_features = train_ds.n_features
@@ -190,7 +291,7 @@ def main():
     mnl_beta = None
     if mnl_results:
         coeff_path = Path(data_dir) / 'mnl_coefficients.json'
-        mnl_beta = load_mnl_beta(str(coeff_path), train_ds.scaler)
+        mnl_beta = load_mnl_beta(str(coeff_path), train_ds.scaler, features=features)
         print(f'  MNL ρ² = {mnl_results["train_stats"]["rho_squared"]:.4f}')
     else:
         print('  MNL coefficients not found - ResLogit will use zero init')
@@ -232,6 +333,12 @@ def main():
         pt_path = Path(data_dir) / f'{model_name}_model.pt'
         torch.save(best_state, pt_path)
         print(f'  Model saved to {pt_path}')
+
+        # Extract betas
+        extract_and_save_betas(
+            model, model_name, features, train_ds.scaler,
+            train_ds.context_scaler, metrics, data_dir, test_ds=test_ds,
+        )
 
     total_elapsed = time.time() - t_total
 
