@@ -15,6 +15,7 @@ Usage:
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +79,41 @@ def main():
 
     print(f"  정류장 OD: {n_stop_od:,} → H3 OD: {n_h3_od:,}")
     print(f"  H3 OD당 평균 경로 수: {avg_routes:.1f}")
+
+    # 5. OSRM 네트워크 도보거리 매핑 (eb_access_dist, eb_egress_dist)
+    print("[5/5] OSRM 도보거리 매핑...")
+    dist_path = os.path.join(EB_DIR, 'h3_stop_distance.csv')
+    if os.path.exists(dist_path):
+        dist_df = pd.read_csv(dist_path)
+        dist_df = dist_df[dist_df['h3_resolution'] == 8]
+
+        # (h3_cell, stop_id) → distance_m 딕셔너리
+        dist_df['stop_id'] = dist_df['stop_id'].astype(str)
+        dist_lookup = dict(zip(
+            zip(dist_df['h3_cell'], dist_df['stop_id']),
+            dist_df['distance_m']
+        ))
+
+        # access: 출발 H3 centroid → 출발 정류장
+        df['eb_access_dist'] = df.apply(
+            lambda r: dist_lookup.get((r['o_h3'], r['o_stop']), 0), axis=1
+        )
+        # egress: 도착 H3 centroid → 도착 정류장
+        df['eb_egress_dist'] = df.apply(
+            lambda r: dist_lookup.get((r['d_h3'], r['d_stop']), 0), axis=1
+        )
+
+        # 도보 시간 추정 (4.8km/h = 80m/min)
+        df['eb_access_time_min'] = df['eb_access_dist'] / 80
+        df['eb_egress_time_min'] = df['eb_egress_dist'] / 80
+        df['ln_eb_access'] = np.log1p(df['eb_access_time_min'])
+        df['ln_eb_egress'] = np.log1p(df['eb_egress_time_min'])
+
+        print(f"  eb_access_dist: mean={df['eb_access_dist'].mean():.0f}m, median={df['eb_access_dist'].median():.0f}m")
+        print(f"  eb_egress_dist: mean={df['eb_egress_dist'].mean():.0f}m, median={df['eb_egress_dist'].median():.0f}m")
+        print(f"  eb_access_time: mean={df['eb_access_time_min'].mean():.1f}min, median={df['eb_access_time_min'].median():.1f}min")
+    else:
+        print(f"  WARNING: {dist_path} 없음, OSRM 거리 컬럼 미생성")
 
     # 저장
     out_path = os.path.join(EB_DIR, 'h3_choice_prob.parquet')
