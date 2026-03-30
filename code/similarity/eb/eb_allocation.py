@@ -2,13 +2,14 @@
 """
 Phase 2-2: EB prior/posterior 계산
 
-Prior:      exp(-β × distance)
+M2 다변량 prior: exp(-β₁×distance + β₂×ln(1+n_routes))
 Likelihood: SC 관측 빈도
-Posterior:  Prior × Likelihood (정규화)
+Posterior: Prior × Likelihood (정규화)
 
 Usage:
     python eb_allocation.py                # 기본
     python eb_allocation.py --alpha 1.0    # prior 강도 조절
+    python eb_allocation.py --distance-only # 거리만 사용 (M1)
 """
 
 import argparse
@@ -24,24 +25,24 @@ DATA_DIR = os.path.join(BASE_DIR, '..', '..', '..', 'data')
 EB_DIR = os.path.join(DATA_DIR, 'eb')
 
 
-def compute_prior(distances, beta):
-    """거리 감쇠 기반 prior 확률"""
+def compute_prior_m2(distances, ln_n_routes, beta_dist, beta_routes):
+    """M2 다변량 prior: 거리 + 노선 수"""
+    utility = beta_dist * distances + beta_routes * ln_n_routes
+    utility -= np.logaddexp.reduce(utility)
+    return np.exp(utility)
+
+
+def compute_prior_m1(distances, beta):
+    """M1 거리만 prior (기존)"""
     log_prior = -beta * distances
     log_prior -= np.logaddexp.reduce(log_prior)
     return np.exp(log_prior)
 
 
 def compute_posterior(prior_probs, sc_counts, alpha=1.0):
-    """Prior × Likelihood → Posterior
-
-    Args:
-        prior_probs: 정규화된 prior 확률
-        sc_counts: SC 관측 건수
-        alpha: prior 강도 (클수록 prior 비중 증가)
-    """
+    """Prior × Likelihood → Posterior"""
     total = sc_counts.sum()
     if total == 0:
-        # SC 데이터 없음 → posterior = prior (GTX 신설역 등)
         return prior_probs
 
     likelihood = sc_counts / total
@@ -52,65 +53,99 @@ def compute_posterior(prior_probs, sc_counts, alpha=1.0):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--alpha', type=float, default=1.0,
-                        help='Prior 강도 (default: 1.0)')
+    parser.add_argument('--alpha', type=float, default=1.0)
+    parser.add_argument('--distance-only', action='store_true', help='M1 거리만 사용')
     args = parser.parse_args()
 
     # 1. β 로드
-    print("[1/3] β 로드...")
-    beta_path = os.path.join(EB_DIR, 'eb_beta.json')
-    if not os.path.exists(beta_path):
-        print(f"  ERROR: {beta_path} 없음. estimate_beta.py를 먼저 실행하세요.")
-        sys.exit(1)
+    print("[1/4] β 로드...")
+    multi_path = os.path.join(EB_DIR, 'eb_multi_beta.json')
+    single_path = os.path.join(EB_DIR, 'eb_beta.json')
 
-    with open(beta_path) as f:
-        beta_info = json.load(f)
-    beta = beta_info['beta']
-    resolution = beta_info['resolution']
-    print(f"  β = {beta:.6f}, resolution = {resolution}")
+    if not args.distance_only and os.path.exists(multi_path):
+        with open(multi_path) as f:
+            multi = json.load(f)
+        # M2 사용
+        m2 = multi.get('M2: distance + n_routes', {})
+        beta_dist = m2['params'].get('distance_m', 0)
+        beta_routes = m2['params'].get('ln_n_routes', 0)
+        use_m2 = True
+        print(f"  M2 prior: β_distance={beta_dist:.6f}, β_ln_n_routes={beta_routes:.6f}")
+    else:
+        with open(single_path) as f:
+            beta_info = json.load(f)
+        beta_dist = -beta_info['beta']
+        beta_routes = 0
+        use_m2 = False
+        print(f"  M1 prior: β_distance={beta_dist:.6f}")
 
-    # 2. 병합 데이터 로드
-    print("[2/3] H3-정류장-SC 데이터 로드...")
-    merged_path = os.path.join(EB_DIR, 'h3_stop_sc_merged.csv')
-    if not os.path.exists(merged_path):
-        print(f"  ERROR: {merged_path} 없음. estimate_beta.py를 먼저 실행하세요.")
-        sys.exit(1)
+    with open(single_path) as f:
+        resolution = json.load(f)['resolution']
 
-    merged = pd.read_csv(merged_path)
-
-    # SC 없는 셀도 포함하기 위해 전체 거리 데이터 로드
+    # 2. 거리 데이터 + SC + GTFS 노선 수 로드
+    print("[2/4] 데이터 로드...")
     dist_path = os.path.join(EB_DIR, 'h3_stop_distance.csv')
     all_dist = pd.read_csv(dist_path)
     all_dist = all_dist[all_dist['h3_resolution'] == resolution]
-
-    # SC counts 병합
-    sc_cols = merged[['h3_cell', 'stop_id', 'sc_count']].copy()
-    sc_cols['stop_id'] = sc_cols['stop_id'].astype(str)
     all_dist['stop_id'] = all_dist['stop_id'].astype(str)
 
-    full = all_dist.merge(sc_cols[['h3_cell', 'stop_id', 'sc_count']],
-                          on=['h3_cell', 'stop_id'], how='left')
+    # SC counts
+    merged_path = os.path.join(EB_DIR, 'h3_stop_sc_merged.csv')
+    if os.path.exists(merged_path):
+        sc_merged = pd.read_csv(merged_path)
+        sc_cols = sc_merged[['h3_cell', 'stop_id', 'sc_count']].copy()
+        sc_cols['stop_id'] = sc_cols['stop_id'].astype(str)
+    else:
+        sc_cols = pd.DataFrame(columns=['h3_cell', 'stop_id', 'sc_count'])
+
+    full = all_dist.merge(sc_cols, on=['h3_cell', 'stop_id'], how='left')
     full['sc_count'] = full['sc_count'].fillna(0).astype(int)
 
+    # GTFS 노선 수
+    if use_m2:
+        match_path = os.path.join(EB_DIR, 'otp_gtfs_stop_matching.csv')
+        if os.path.exists(match_path):
+            gtfs_match = pd.read_csv(match_path)
+            gtfs_match['otp_stop_id'] = gtfs_match['otp_stop_id'].astype(str)
+            full = full.merge(
+                gtfs_match[['otp_stop_id', 'n_routes']],
+                left_on='stop_id', right_on='otp_stop_id', how='left'
+            )
+            full['n_routes'] = full['n_routes'].fillna(1)
+            if 'otp_stop_id' in full.columns:
+                full.drop(columns='otp_stop_id', inplace=True)
+        else:
+            full['n_routes'] = 1
+
+        full['ln_n_routes'] = np.log1p(full['n_routes'])
+
     # 3. Prior / Posterior 계산
-    print("[3/3] Prior / Posterior 계산...")
+    print("[3/4] Prior / Posterior 계산...")
     results = []
     for cell, group in full.groupby('h3_cell'):
         distances = group['distance_m'].values
-        sc_counts = group['sc_count'].values
+        sc_counts_arr = group['sc_count'].values
 
-        prior = compute_prior(distances, beta)
-        posterior = compute_posterior(prior, sc_counts, alpha=args.alpha)
+        if use_m2:
+            ln_routes = group['ln_n_routes'].values
+            prior = compute_prior_m2(distances, ln_routes, beta_dist, beta_routes)
+        else:
+            prior = compute_prior_m1(distances, -beta_dist)
+
+        posterior = compute_posterior(prior, sc_counts_arr, alpha=args.alpha)
 
         for i, (_, row) in enumerate(group.iterrows()):
-            results.append({
+            result_row = {
                 'h3_cell': cell,
                 'stop_id': row['stop_id'],
                 'distance_m': row['distance_m'],
-                'sc_count': int(sc_counts[i]),
+                'sc_count': int(sc_counts_arr[i]),
                 'prior': round(prior[i], 6),
                 'posterior': round(posterior[i], 6),
-            })
+            }
+            if use_m2:
+                result_row['n_routes'] = int(row.get('n_routes', 1))
+            results.append(result_row)
 
     result_df = pd.DataFrame(results)
 
@@ -122,8 +157,10 @@ def main():
     print(f"  총 {n_cells} 셀")
     print(f"  SC 있는 셀: {n_cells - n_prior_only}")
     print(f"  SC 없는 셀 (prior only): {n_prior_only}")
+    print(f"  prior 모형: {'M2 (distance + n_routes)' if use_m2 else 'M1 (distance only)'}")
 
-    # 저장
+    # 4. 저장
+    print("[4/4] 저장...")
     prior_path = os.path.join(EB_DIR, 'eb_prior.csv')
     posterior_path = os.path.join(EB_DIR, 'eb_posterior.csv')
 
