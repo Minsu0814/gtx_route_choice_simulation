@@ -1,0 +1,45 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$FILE_PATH $INPUT\" | grep -qi '\\.env' && echo 'BLOCKED: .env 파일 접근 차단됨' && exit 1 || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx prettier --write \"$FILE_PATH\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0); $text = $template.GetElementsByTagName('text'); $text.Item(0).AppendChild($template.CreateTextNode('Claude Code: $TITLE')) | Out-Null; $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Claude Code'); $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($template))\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf*)",
+      "Edit(.env*)"
+    ]
+  }
+}
