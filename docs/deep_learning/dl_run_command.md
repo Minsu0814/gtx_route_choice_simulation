@@ -10,14 +10,14 @@ python -u code\similarity\deep_learning\train_deep_learning.py --epochs 100 --pa
 
 ## 주요 옵션
 
-| 옵션 | 기본값 | 설명 |
-|------|--------|------|
-| `--models` | 전체 5개 | 특정 모델만 학습 (dnn, tastenet, reslogit, asudnn, lmnl) |
-| `--epochs` | 100 | 최대 에폭 수 |
-| `--patience` | 15 | Early stopping patience |
-| `--lr` | 1e-3 | Learning rate |
-| `--batch-size` | 2048 | 배치 크기 |
-| `--seed` | 42 | 랜덤 시드 |
+| 옵션           | 기본값   | 설명                                                     |
+| -------------- | -------- | -------------------------------------------------------- |
+| `--models`     | 전체 5개 | 특정 모델만 학습 (dnn, tastenet, reslogit, asudnn, lmnl) |
+| `--epochs`     | 100      | 최대 에폭 수                                             |
+| `--patience`   | 15       | Early stopping patience                                  |
+| `--lr`         | 1e-3     | Learning rate                                            |
+| `--batch-size` | 2048     | 배치 크기                                                |
+| `--seed`       | 42       | 랜덤 시드                                                |
 
 ## 예시
 

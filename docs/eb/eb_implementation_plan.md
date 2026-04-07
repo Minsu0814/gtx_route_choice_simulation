@@ -104,10 +104,12 @@ EB가 1단계에서 도보 거리 기반으로 정류장 배분을 처리하므�
 ## 5. GTX 신설역 처리
 
 GTX역이 기존 지하철역에 병설되는 경우 (강남역 등):
+
 - 물리적으로 같은 위치 → EB prior가 거의 동일
 - 하나의 접근점으로 묶고, GTX vs 지하철 선택은 경로선택모형에서 처리
 
 GTX-B/C/D 신설 시:
+
 - SC 데이터 없음 → posterior = prior (도보 거리만으로 배분)
 - GTX-A의 SC 패턴을 참고하여 prior 보정 가능성 검토
 
@@ -115,11 +117,11 @@ GTX-B/C/D 신설 시:
 
 ## 6. 구현 순서
 
-| 순서 | 작업 | 파일 |
-|------|------|------|
-| 1 | 정류장 좌표 → H3 매핑, centroid-정류장 거리 계산 | build_h3_mapping.py |
-| 2 | SC 이용빈도 ~ 도보거리 관계에서 β 추정 (MLE) | estimate_beta.py |
-| 3 | EB prior/likelihood/posterior 계산 | eb_allocation.py |
-| 4 | 기존 학습 데이터에 H3 키 부여 + choice_prob 재집계 | aggregate_h3_choice.py |
-| 5 | walk 피처 제거한 경로선택모형 재추정 + 성능 비교 | run_k3.py 수정 |
-| 6 | GTX 시나리오 적용 파이프라인 | apply_eb_model.py |
+| 순서 | 작업                                               | 파일                   |
+| ---- | -------------------------------------------------- | ---------------------- |
+| 1    | 정류장 좌표 → H3 매핑, centroid-정류장 거리 계산   | build_h3_mapping.py    |
+| 2    | SC 이용빈도 ~ 도보거리 관계에서 β 추정 (MLE)       | estimate_beta.py       |
+| 3    | EB prior/likelihood/posterior 계산                 | eb_allocation.py       |
+| 4    | 기존 학습 데이터에 H3 키 부여 + choice_prob 재집계 | aggregate_h3_choice.py |
+| 5    | walk 피처 제거한 경로선택모형 재추정 + 성능 비교   | run_k3.py 수정         |
+| 6    | GTX 시나리오 적용 파이프라인                       | apply_eb_model.py      |

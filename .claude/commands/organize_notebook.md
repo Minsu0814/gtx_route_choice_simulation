@@ -3,6 +3,7 @@
 주어진 Jupyter 노트북(.ipynb)을 정리하고 구조화합니다.
 
 ## 대상 파일
+
 $ARGUMENTS
 
 ## 작업 내용

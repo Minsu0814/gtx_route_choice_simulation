@@ -37,9 +37,6 @@
     ]
   },
   "permissions": {
-    "deny": [
-      "Bash(rm -rf*)",
-      "Edit(.env*)"
-    ]
+    "deny": ["Bash(rm -rf*)", "Edit(.env*)"]
   }
 }

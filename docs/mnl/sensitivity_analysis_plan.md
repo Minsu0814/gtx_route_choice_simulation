@@ -1,21 +1,25 @@
 # Sensitivity Analysis 계획
 
 ## 목적
+
 저널 리뷰어 대응 — 3가지 파라미터의 임의성(arbitrariness)에 대한 robustness 증명
 
 ## 대상 파라미터
 
 ### #3. 유사도 가중치
+
 - 현재: mode=0.10, seq=0.15, time=0.10, route=0.15, spatial=0.50
 - 문제: "왜 이 가중치인가?" 이론적 근거 없음
 - 대응: 8개 가중치 조합으로 모형 재추정, 결과 비교
 
 ### #4. 매칭 임계값
+
 - 현재: composite ≥ 0.6이면 매칭 수락
 - 문제: "왜 0.6인가?" 근거 없음
 - 대응: 0.4~0.8 범위에서 5개 값 테스트
 
 ### #10. 공간 정규화 거리
+
 - 현재: sim_spatial = max(0, 1 - hausdorff / 5000m)
 - 문제: "왜 5km인가?" 근거 없음
 - 대응: 2km~10km 범위에서 5개 값 테스트
@@ -26,29 +30,33 @@
 
 ### Sweep A: 가중치 (8개 시나리오)
 
-| 이름 | mode | seq | time | route | spatial | 의도 |
-|------|------|-----|------|-------|---------|------|
-| baseline | 0.10 | 0.15 | 0.10 | 0.15 | 0.50 | similarity.py 기본값 |
-| build_actual | 0.14 | 0.21 | 0.14 | 0.21 | 0.30 | 실제 학습에 사용된 값 |
-| equal | 0.20 | 0.20 | 0.20 | 0.20 | 0.20 | 사전 가정 없음 |
-| no_spatial | 0.20 | 0.30 | 0.15 | 0.35 | 0.00 | spatial 제거 |
-| spatial_heavy | 0.05 | 0.10 | 0.05 | 0.10 | 0.70 | spatial 극대화 |
-| route_heavy | 0.10 | 0.15 | 0.10 | 0.40 | 0.25 | 노선 중심 |
-| seq_heavy | 0.10 | 0.40 | 0.10 | 0.15 | 0.25 | 정류장 순서 중심 |
-| time_heavy | 0.10 | 0.15 | 0.40 | 0.10 | 0.25 | 시간 중심 |
+| 이름          | mode | seq  | time | route | spatial | 의도                  |
+| ------------- | ---- | ---- | ---- | ----- | ------- | --------------------- |
+| baseline      | 0.10 | 0.15 | 0.10 | 0.15  | 0.50    | similarity.py 기본값  |
+| build_actual  | 0.14 | 0.21 | 0.14 | 0.21  | 0.30    | 실제 학습에 사용된 값 |
+| equal         | 0.20 | 0.20 | 0.20 | 0.20  | 0.20    | 사전 가정 없음        |
+| no_spatial    | 0.20 | 0.30 | 0.15 | 0.35  | 0.00    | spatial 제거          |
+| spatial_heavy | 0.05 | 0.10 | 0.05 | 0.10  | 0.70    | spatial 극대화        |
+| route_heavy   | 0.10 | 0.15 | 0.10 | 0.40  | 0.25    | 노선 중심             |
+| seq_heavy     | 0.10 | 0.40 | 0.10 | 0.15  | 0.25    | 정류장 순서 중심      |
+| time_heavy    | 0.10 | 0.15 | 0.40 | 0.10  | 0.25    | 시간 중심             |
 
 ### Sweep B: 임계값 (5개 값)
+
 0.4, 0.5, **0.6**(baseline), 0.7, 0.8
 
 ### Sweep C: 정규화 거리 (5개 값)
+
 2km, 3km, **5km**(baseline), 7km, 10km
 
 ## 핵심 아이디어: Full pipeline 재실행 불필요
 
 `route_choice_training.parquet`에 component scores가 이미 저장됨:
+
 - `sim_mode`, `sim_sequence`, `sim_time`, `sim_route`, `sim_spatial`
 
 따라서:
+
 1. **가중치 변경**: `new_composite = Σ w_i × sim_i` 로 재계산
 2. **임계값 변경**: new_composite ≥ threshold로 필터링
 3. **정규화 거리 변경**: `raw_hausdorff = (1 - sim_spatial) × 5000`로 역산 후 `new_spatial = max(0, 1 - raw_hausdorff / new_norm_dist)`로 재계산
@@ -70,18 +78,18 @@
 
 ## 기록할 지표
 
-| 지표 | 설명 |
-|------|------|
-| n_ods | 필터링 후 남은 OD 수 |
-| train_rho_sq | 학습 McFadden ρ² |
-| test_rho_sq | 테스트 McFadden ρ² |
-| test_fpr | First Preference Recovery |
-| test_rmse | RMSE |
-| beta_IVT | 차내시간 계수 |
-| beta_access | 접근보행 계수 |
-| beta_transfers | 환승 계수 |
-| beta_bus | 버스 더미 계수 |
-| beta_train | 철도 더미 계수 |
+| 지표           | 설명                      |
+| -------------- | ------------------------- |
+| n_ods          | 필터링 후 남은 OD 수      |
+| train_rho_sq   | 학습 McFadden ρ²          |
+| test_rho_sq    | 테스트 McFadden ρ²        |
+| test_fpr       | First Preference Recovery |
+| test_rmse      | RMSE                      |
+| beta_IVT       | 차내시간 계수             |
+| beta_access    | 접근보행 계수             |
+| beta_transfers | 환승 계수                 |
+| beta_bus       | 버스 더미 계수            |
+| beta_train     | 철도 더미 계수            |
 
 ## 결과 해석 기준
 
@@ -93,22 +101,26 @@
 ## 출력물
 
 ### CSV (논문 Table용)
+
 - `data/sensitivity/sensitivity_weights.csv`
 - `data/sensitivity/sensitivity_threshold.csv`
 - `data/sensitivity/sensitivity_normdist.csv`
 
 ### Figure (논문 Figure용)
+
 - `fig_sensitivity_weights.png` — 가중치별 ρ², FPR, 샘플수
 - `fig_sensitivity_threshold.png` — 임계값별 ρ², FPR, 샘플수
 - `fig_sensitivity_normdist.png` — 정규화거리별 ρ², FPR, 샘플수
 - `fig_beta_stability.png` — 전 시나리오 β 안정성
 
 ### JSON (전체 데이터)
+
 - `data/sensitivity/sensitivity_all.json`
 
 ## Limitation
 
 **Option A (pragmatic approach)** 사용:
+
 - 가중치/임계값 변경이 OD-level 필터링만 변경
 - trip-level 재매칭(어떤 대안이 best match인지)은 변경하지 않음
 - 155M행 개별 재매칭은 시간상 불가 (~8시간/시나리오)

@@ -15,6 +15,7 @@ GTX 영향평가를 위한 경로선택확률 예측 모형 구축.
 ## 다음 작업 (교수님 지시)
 
 EB 빼고, 기존 OTP 결과에 first/last mile만 매핑 + H3 셀 단위 합침:
+
 1. ✅ H3 매핑 + OSRM 거리 (완료)
 2. ✅ H3 OD choice set 통합 (완료)
 3. ✅ 외부 access/egress 계산 (완료)
@@ -72,24 +73,29 @@ Docker 컨테이너 `osrm-foot` (localhost:5000, 한국 foot routing)
 Voronoi 입력이 data/raptor_input_voronoi.csv에 준비됨
 
 ## 원칙
+
 - 한국어 해요체, 코드는 영어
 - 3단계 이상 작업 → Plan Mode 필수
 - 일이 꼬이면 즉시 멈추고 re-plan
 - Git: Conventional commits (feat:, fix:, docs:, refactor:)
 
 ## Notes 디렉토리
+
 - 작업/기능마다 `notes/` 디렉토리를 유지할 것
 - 작업 중 발견한 내용, 의사결정 이유, 삽질 로그 등을 기록
 - PR 올린 후에도 학습 내용이 남도록 `lessons.md` 파일 업데이트 해줘
 - 형식: `notes/{작업명}.md`
 
 ## 코드 규칙
+
 - 함수 30줄 이내, 파일 300줄 이내
 - API 엔드포인트마다 에러 핸들링
 
 ## 검증
+
 - 수정 후 관련 테스트 실행
 - "시니어 엔지니어가 승인할까?" 기준
 
 ## 교훈 (틀린 것 다시 안 틀리기 위한 카닝)
+
 <!-- 실수할 때마다 여기에 추가. 절대 삭제하지 말 것. -->

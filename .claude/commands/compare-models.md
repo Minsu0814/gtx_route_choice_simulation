@@ -7,6 +7,7 @@ D. H3 OD + 전부 (13피처)
 E. H3 OD - OTP + EB (10피처)
 
 모형 종류는 인자로 지정 (기본: MNL):
+
 - /compare-models mnl
 - /compare-models tastenet
 
