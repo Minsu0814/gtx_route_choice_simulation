@@ -1,0 +1,31 @@
+timestamp	experiment	model	rho_sq	fpr_top1	fpr_top3	rmse	kept	notes
+2026-03-30 00:56:41	baseline_tastenet	TasteNet	0.542535	0.7393	0.9697	0.2421	Y	initial baseline
+2026-03-30 01:02:14	exp02_wider_deeper_gelu_bias	TasteNet-v2	0.542911	0.7401	0.9699	0.2417	Y	improved +0.000376
+2026-03-30 01:08:04	exp03_multihead_interactions	TasteNet-MultiHead	0.561846	0.7534	0.9736	0.2322	Y	improved +0.018935
+2026-03-30 01:13:53	exp04_wider_more_interactions	TasteNet-MultiHead-v2	0.567693	0.7581	0.9747	0.2281	Y	improved +0.005847
+2026-03-30 01:19:49	exp05_alt_attention	TasteNet-Attention	0.567226	0.7584	0.9745	0.2288	N	no improvement (baseline=0.567693)
+2026-03-30 01:25:43	exp06_multihead_v3_adamw	TasteNet-MultiHead-v3	0.566819	0.7606	0.9757	0.2277	N	no improvement (baseline=0.567693)
+2026-03-30 01:31:35	exp07_efficient_multihead	TasteNet-Efficient	0.566858	0.7586	0.9748	0.2287	N	no improvement (baseline=0.567693)
+2026-03-30 01:37:34	exp08_deep_tastenet	DeepTasteNet	0.568690	0.7595	0.9751	0.2275	Y	improved +0.000997
+2026-03-30 01:43:18	exp09_utility_network	TasteNet-UtilityNet	0.571091	0.7584	0.9746	0.2284	Y	improved +0.002401
+2026-03-30 01:49:09	exp10_big_utility_net	TasteNet-BigUtilNet	0.573045	0.7638	0.9760	0.2252	Y	improved +0.001954
+2026-03-30 01:54:38	exp11_fast_big_utilnet	TasteNet-BigUtilNet-v2	0.571906	0.7612	0.9752	0.2269	N	no improvement (baseline=0.573045)
+2026-03-30 02:00:19	exp12_utilnet_silu_wd	TasteNet-UtilNet-SiLU	0.571876	0.7597	0.9747	0.2278	N	no improvement (baseline=0.573045)
+2026-03-30 02:06:03	exp13_residual_utilnet	TasteNet-ResUtilNet	0.575745	0.7648	0.9759	0.2249	Y	improved +0.002700
+2026-03-30 02:11:49	exp14_resutil_deeper	TasteNet-ResUtilNet-v2	0.572308	0.7629	0.9757	0.2253	N	no improvement (baseline=0.575745)
+2026-03-30 02:17:41	exp15_resutil_192	TasteNet-ResUtilNet-192	0.572965	0.7608	0.9754	0.2260	N	no improvement (baseline=0.575745)
+2026-03-30 02:23:32	exp16_relative_features	TasteNet-RelativeUtil	0.569583	0.7660	0.9762	0.2250	N	no improvement (baseline=0.575745)
+2026-03-30 02:29:40	exp17_self_attention	TasteNet-SelfAttn	0.575000	0.7634	0.9764	0.2246	N	no improvement (baseline=0.575745)
+2026-03-30 02:35:40	exp18_small_attn_resutil	TasteNet-AttnRes	0.573112	0.7621	0.9753	0.2264	N	no improvement (baseline=0.575745)
+2026-03-30 02:41:56	exp19_resutil_lr15	TasteNet-ResUtil-LR15	0.574103	0.7632	0.9756	0.2255	N	no improvement (baseline=0.575745)
+2026-03-30 02:48:11	exp20_single_resnet	TasteNet-SingleRes	0.576384	0.7633	0.9760	0.2243	Y	improved +0.000639
+2026-03-30 02:53:40	exp21_resnet_6blocks	TasteNet-SingleRes-6B	0.574897	0.7632	0.9757	0.2247	N	no improvement (baseline=0.576384)
+2026-03-30 02:59:22	exp22_bottleneck_resnet	TasteNet-BottleneckRes	0.574958	0.7639	0.9762	0.2249	N	no improvement (baseline=0.576384)
+2026-03-30 03:05:26	exp23_film_resnet	TasteNet-FiLM	0.575766	0.7649	0.9765	0.2240	N	no improvement (baseline=0.576384)
+2026-03-30 03:11:26	exp24_resnet_low_dropout	TasteNet-ResNet-LD	0.574913	0.7603	0.9753	0.2260	N	no improvement (baseline=0.576384)
+2026-03-30 03:17:27	exp25_mode_interactions	TasteNet-ModeInt	0.575674	0.7629	0.9754	0.2252	N	no improvement (baseline=0.576384)
+2026-03-30 03:23:24	exp26_resnet_skip	TasteNet-ResSkip	0.575666	0.7614	0.9757	0.2258	N	no improvement (baseline=0.576384)
+2026-03-30 03:29:37	exp27_moe	TasteNet-MoE	0.574828	0.7626	0.9753	0.2261	N	no improvement (baseline=0.576384)
+2026-03-30 03:35:34	exp28_resnet_5b_288	TasteNet-Res5B288	0.575279	0.7627	0.9757	0.2252	N	no improvement (baseline=0.576384)
+2026-03-30 03:41:26	exp29_all_pairs	TasteNet-AllPairs	0.574043	0.7624	0.9758	0.2256	N	no improvement (baseline=0.576384)
+2026-03-30 03:47:18	exp30_prenorm_resnet	TasteNet-PreNorm	0.575532	0.7646	0.9765	0.2244	N	no improvement (baseline=0.576384)

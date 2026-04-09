@@ -1,0 +1,11 @@
+{
+  "model_name": "TasteNet-SingleRes",
+  "experiment": "exp20_single_resnet",
+  "rho_sq": 0.576384,
+  "fpr_top1": 0.7633,
+  "fpr_top3": 0.976,
+  "rmse": 0.2243,
+  "ll_beta": -3720016.65,
+  "ll_0": -8781582.19,
+  "n_ods": 105395
+}
