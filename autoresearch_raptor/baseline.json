@@ -1,0 +1,18 @@
+{
+  "experiment": "finetune_t600_w10_b0.7_tr1.5_wt1.5",
+  "params": {
+    "transfer_cost_secs": 600,
+    "walk_reluctance": 10.0,
+    "bus_reluctance": 0.7,
+    "train_reluctance": 1.5,
+    "wait_reluctance": 1.5
+  },
+  "score": 0.7382,
+  "category_match": 0.964,
+  "transfer_match": 0.887,
+  "duration_180s": 0.386,
+  "duration_mae": 340.8,
+  "n_matched": 2000,
+  "n_total": 2000,
+  "routing_time_s": 80.7
+}
