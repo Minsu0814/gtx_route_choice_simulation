@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / 'code' / 'similarity' / 'analysis'))
 
 from raptor_calibration_prep import run_calibration
 
-DATA_DIR = ROOT / 'data' / 'training_set_new'
+DATA_DIR = ROOT / 'data' / 'results'
 
 
 def main():

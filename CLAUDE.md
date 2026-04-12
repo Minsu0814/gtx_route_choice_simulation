@@ -26,24 +26,35 @@ EB 빼고, 기존 OTP 결과에 first/last mile만 매핑 + H3 셀 단위 합침
 
 ```
 code/similarity/
-├── module/          — 유사도, 피처 추출 (공통)
-├── mnl/             — MNL 추정 (run_k3.py 등)
-├── deep_learning/   — TasteNet, DNN 등
-├── eb/              — EB 정류장 배분 모듈
-├── voronoi/         — Voronoi 대표점 파이프라인
-└── build_training_set.py — 학습 데이터 구축
+├── run_raptor_full.py           — 1. Raptor 라우팅 (보정 파라미터)
+├── build_raptor_choice_set.py   — 2. Choice set 구축 (중복제거+필터)
+├── attach_raptor_trip_counts.py — 3. SC 매칭 (composite similarity)
+├── spec_config.py               — 공통 설정 (카테고리, ASC)
+├── module/                      — 유사도, 피처 추출 (공통)
+├── mnl/
+│   ├── run_mnl_weighted.py      — 4. Weighted MNL (A_total_uncon)
+│   └── assign_mnl.py            — 5. 배분
+├── analysis/
+│   ├── compare_choicesets.py    — OTP vs Raptor 비교
+│   └── raptor_calibration_*.py  — Raptor 파라미터 보정
+└── deep_learning/module/        — TasteNet 모듈 (참고용)
 ```
 
 ## 데이터
 
 ```
 data/
-├── training_set/    — 학습 데이터, MNL 계수, OTP 캐시
+├── cache/
+│   ├── otp/         — OTP 캐시 (otp_cache.db, filtered)
+│   └── raptor/      — Raptor 캐시 (raptor_cache.db, filtered)
+├── choice_set/
+│   ├── otp/         — OTP 학습데이터 (weighted parquet)
+│   └── raptor/      — Raptor choice set (weighted parquet)
+├── results/         — MNL 결과, 배분, 비교 분석
 ├── tcn/             — SC 7일치 (2025.02.17~23)
 ├── gtfs/a1/         — GTFS (정류장, 노선, 시간표)
 ├── otp/             — OTP 입력/출력
-├── eb/              — EB 결과 (H3 매핑, β, posterior 등)
-└── voronoi/         — Voronoi centroid, Raptor 입력
+└── shp/             — 셰이프파일
 ```
 
 ## Git

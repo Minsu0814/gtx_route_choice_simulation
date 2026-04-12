@@ -24,9 +24,9 @@ sys.path.insert(0, str(ROOT / 'code' / 'similarity'))
 from spec_config import MNL_SPECS, CATEGORY_MAP, ASC_REF
 from module.feature_transform import transform_raw_features, build_feature_vector
 
-CACHE_DB = ROOT / 'data' / 'training_set_new' / 'otp_cache_filtered.db'
-MNL_JSON = ROOT / 'data' / 'training_set_new' / 'mnl_4spec.json'
-OUT_DIR = ROOT / 'data' / 'training_set_new'
+CACHE_DB = ROOT / 'data' / 'cache' / 'otp' / 'otp_cache_filtered.db'
+MNL_JSON = ROOT / 'data' / 'results' / 'mnl_weighted.json'
+OUT_DIR = ROOT / 'data' / 'results'
 
 # Raw feature columns to keep in output
 RAW_COLS = [
