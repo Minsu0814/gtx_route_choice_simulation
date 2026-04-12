@@ -1,8 +1,8 @@
 """
 Run calibrated Raptor on all ODs and save results to SQLite cache.
 
-Input:  data/otp/input/otp_od_input_over13.csv (774,895 ODs)
-Output: data/cache/raptor/raptor_cache.db (SQLite, same schema as otp_cache.db)
+Input:  data/routing/input/otp_od_input_over13.csv (774,895 ODs)
+Output: data/routing/output/rust_calibrated/raptor_cache.db (SQLite)
 
 Params: t600, w10, b0.7, tr1.5, wt1.5
 
@@ -21,8 +21,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, '..', '..', 'data')
 
 GTFS_DIR = os.path.join(DATA_DIR, 'gtfs', 'a1')
-OD_INPUT = os.path.join(DATA_DIR, 'otp', 'input', 'otp_od_input_over13.csv')
-OUTPUT_DIR = os.path.join(DATA_DIR, 'cache', 'raptor')
+OD_INPUT = os.path.join(DATA_DIR, 'routing', 'input', 'otp_od_input_over13.csv')
+OUTPUT_DIR = os.path.join(DATA_DIR, 'routing', 'output', 'rust_calibrated')
 OUTPUT_DB = os.path.join(OUTPUT_DIR, 'raptor_cache.db')
 
 RAPTOR_CONFIG = {

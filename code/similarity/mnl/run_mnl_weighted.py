@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'code' / 'similarity'))
 
 from spec_config import CATEGORY_MAP, ASC_REF
 
-DATA_PATH = (ROOT / 'data' / 'choice_set' / 'otp'
+DATA_PATH = (ROOT / 'data' / 'choice_set' / 'java_default'
              / 'route_choice_filtered_training_weighted.parquet')
 OUT_PATH = ROOT / 'data' / 'results' / 'mnl_weighted.json'
 

@@ -44,16 +44,17 @@ code/similarity/
 
 ```
 data/
-├── cache/
-│   ├── otp/         — OTP 캐시 (otp_cache.db, filtered)
-│   └── raptor/      — Raptor 캐시 (raptor_cache.db, filtered)
+├── routing/
+│   ├── input/             — OD 입력 CSV
+│   └── output/
+│       ├── java_default/      — Java RAPTOR (기존 파라미터, 원본 JSON + 캐시)
+│       └── rust_calibrated/   — Rust RAPTOR (보정 파라미터, 캐시)
 ├── choice_set/
-│   ├── otp/         — OTP 학습데이터 (weighted parquet)
-│   └── raptor/      — Raptor choice set (weighted parquet)
+│   ├── java_default/      — Java RAPTOR 학습데이터
+│   └── rust_calibrated/   — Rust RAPTOR choice set (최종)
 ├── results/         — MNL 결과, 배분, 비교 분석
 ├── tcn/             — SC 7일치 (2025.02.17~23)
 ├── gtfs/a1/         — GTFS (정류장, 노선, 시간표)
-├── otp/             — OTP 입력/출력
 └── shp/             — 셰이프파일
 ```
 

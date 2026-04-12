@@ -7,9 +7,9 @@ Same matching logic as build_training_set.py:
   3. Best composite score → chosen alt (threshold=0.5)
   4. Count matches per alt → choice_prob
 
-Input:  data/cache/raptor/raptor_cache_filtered.db
+Input:  data/routing/output/rust_calibrated/raptor_cache_filtered.db
         data/tcn/*/TCN_*.parquet (7 days)
-Output: data/choice_set/raptor/raptor_choice_set_weighted.parquet
+Output: data/choice_set/rust_calibrated/raptor_choice_set_weighted.parquet
 
 Usage: python attach_raptor_trip_counts.py
 """
@@ -34,12 +34,12 @@ from module.similarity import (
     compute_composite_similarity,
 )
 
-RAPTOR_DB = os.path.join(DATA_DIR, 'cache', 'raptor',
+RAPTOR_DB = os.path.join(DATA_DIR, 'routing', 'output', 'rust_calibrated',
                          'raptor_cache_filtered.db')
-RAPTOR_PARQUET = os.path.join(DATA_DIR, 'choice_set', 'raptor',
+RAPTOR_PARQUET = os.path.join(DATA_DIR, 'choice_set', 'rust_calibrated',
                               'raptor_choice_set.parquet')
 TCN_DIR = os.path.join(DATA_DIR, 'tcn')
-OUTPUT_PATH = os.path.join(DATA_DIR, 'choice_set', 'raptor',
+OUTPUT_PATH = os.path.join(DATA_DIR, 'choice_set', 'rust_calibrated',
                            'raptor_choice_set_weighted.parquet')
 
 # Same weights as build_training_set.py

@@ -38,7 +38,7 @@ FEATURE_LABELS = [
 CONTEXT_FEATURES = ['od_distance_km', 'choice_set_size']
 
 
-def load_and_split(data_dir='../../../data/choice_set/otp', test_size=0.2, random_state=42):
+def load_and_split(data_dir='../../../data/choice_set/java_default', test_size=0.2, random_state=42):
     """MNL과 동일한 OD-level stratified split으로 데이터 로드."""
     data_path = Path(data_dir) / 'route_choice_training.parquet'
     df = pd.read_parquet(data_path)
@@ -182,7 +182,7 @@ def print_mode_share(train_df, test_df):
             print(f'    {cat:<20s} {pct:5.1f}%')
 
 
-def create_dataloaders(data_dir='../../../data/choice_set/otp', batch_size=2048,
+def create_dataloaders(data_dir='../../../data/choice_set/java_default', batch_size=2048,
                        num_workers=0, device='cpu', features=None):
     """Train/Test DataLoader 생성."""
     train_df, test_df = load_and_split(data_dir)

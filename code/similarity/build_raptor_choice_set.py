@@ -29,11 +29,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, '..', '..', 'data')
 sys.path.insert(0, BASE_DIR)
 
-INPUT_DB = os.path.join(DATA_DIR, 'cache', 'raptor', 'raptor_cache.db')
-OTP_INPUT_CSV = os.path.join(DATA_DIR, 'otp', 'input', 'otp_od_input_over13.csv')
-OUTPUT_DIR = os.path.join(DATA_DIR, 'cache', 'raptor')
+INPUT_DB = os.path.join(DATA_DIR, 'routing', 'output', 'rust_calibrated', 'raptor_cache.db')
+OTP_INPUT_CSV = os.path.join(DATA_DIR, 'routing', 'input', 'otp_od_input_over13.csv')
+OUTPUT_DIR = os.path.join(DATA_DIR, 'routing', 'output', 'rust_calibrated')
 OUTPUT_DB = os.path.join(OUTPUT_DIR, 'raptor_cache_filtered.db')
-OUTPUT_PARQUET = os.path.join(DATA_DIR, 'choice_set', 'raptor', 'raptor_choice_set.parquet')
+OUTPUT_PARQUET = os.path.join(DATA_DIR, 'choice_set', 'rust_calibrated', 'raptor_choice_set.parquet')
 
 SAME_STOP_DISTANCE_M = 500  # 500m (Raptor explores diverse access stops)
 MIN_CHOICE_SET_SIZE = 2

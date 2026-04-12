@@ -23,8 +23,8 @@ from module.similarity import (
     compute_all_metrics, compute_composite_similarity,
 )
 
-OTP_DB = ROOT / 'data' / 'cache' / 'otp' / 'otp_cache.db'
-RAPTOR_DB = ROOT / 'data' / 'cache' / 'raptor' / 'raptor_cache_filtered.db'
+OTP_DB = ROOT / 'data' / 'routing' / 'output' / 'java_default' / 'otp_cache.db'
+RAPTOR_DB = ROOT / 'data' / 'routing' / 'output' / 'rust_calibrated' / 'raptor_cache_filtered.db'
 TCN_DIR = ROOT / 'data' / 'tcn'
 
 SIM_WEIGHTS = {'mode': 0.39, 'route': 0.40, 'sequence': 0.21}
